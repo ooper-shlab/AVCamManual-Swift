@@ -6,40 +6,43 @@
 //
 //
 /*
- Copyright (C) 2014 Apple Inc. All Rights Reserved.
- See LICENSE.txt for this sample’s licensing information
+Copyright (C) 2015 Apple Inc. All Rights Reserved.
+See LICENSE.txt for this sample’s licensing information
 
- Abstract:
-
-  Control of camera functions.
-
+Abstract:
+View controller for camera interface.
 */
 
 import UIKit
 import AVFoundation
-import AssetsLibrary
+import Photos
 
-private func contextUsing(ptr: UnsafeMutablePointer<Void>) -> UnsafeMutablePointer<Void> {
-    return ptr
+private var CapturingStillImageContext = 0
+private var RecordingContext = 0
+private var SessionRunningContext = 0
+
+private var FocusModeContext = 0
+private var ExposureModeContext = 0
+private var WhiteBalanceModeContext = 0
+private var LensPositionContext = 0
+private var ExposureDurationContext = 0
+private var ISOContext = 0
+private var ExposureTargetOffsetContext = 0
+private var DeviceWhiteBalanceGainsContext = 0
+private var LensStabilizationContext = 0
+
+private enum AVCamManualSetupResult: Int {
+    case Success
+    case CameraNotAuthorized
+    case SessionConfigurationFailed
 }
-private var dummy: Int = 0
-private var CapturingStillImageContext = contextUsing(&dummy)
-private var RecordingContext = contextUsing(&CapturingStillImageContext)
-private var SessionRunningAndDeviceAuthorizedContext = contextUsing(&RecordingContext)
-
-private var FocusModeContext = contextUsing(&SessionRunningAndDeviceAuthorizedContext)
-private var ExposureModeContext = contextUsing(&FocusModeContext)
-private var WhiteBalanceModeContext = contextUsing(&ExposureModeContext)
-private var LensPositionContext = contextUsing(&WhiteBalanceModeContext)
-private var ExposureDurationContext = contextUsing(&LensPositionContext)
-private var ISOContext = contextUsing(&ExposureDurationContext)
-private var ExposureTargetOffsetContext = contextUsing(&ISOContext)
-private var DeviceWhiteBalanceGainsContext = contextUsing(&ExposureTargetOffsetContext)
 
 @objc(AAPLCameraViewController)
 class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDelegate {
     
     @IBOutlet weak var previewView: AAPLPreviewView!
+    @IBOutlet weak var cameraUnavailableLabel: UILabel!
+    @IBOutlet weak var resumeButton: UIButton!
     @IBOutlet weak var recordButton: UIButton!
     @IBOutlet weak var cameraButton: UIButton!
     @IBOutlet weak var stillButton: UIButton!
@@ -76,115 +79,164 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
     @IBOutlet weak var tintSlider: UISlider!
     @IBOutlet weak var tintNameLabel: UILabel!
     @IBOutlet weak var tintValueLabel: UILabel!
-    private var sessionQueue: dispatch_queue_t! // Communicate with the session and other session objects on this queue.
+    
+    @IBOutlet weak var manualHUDLensStabilizationView: UIView!
+    @IBOutlet weak var lensStabilizationControl: UISegmentedControl!
+    
+    // Session management.
+    private var sessionQueue: dispatch_queue_t!
     dynamic var session: AVCaptureSession!
     dynamic var videoDeviceInput: AVCaptureDeviceInput?
     private var videoDevice: AVCaptureDevice?
     dynamic var movieFileOutput: AVCaptureMovieFileOutput?
     dynamic var stillImageOutput: AVCaptureStillImageOutput?
     
+    // Utilities.
+    private var setupResult: AVCamManualSetupResult = .Success
+    private var sessionRunning: Bool = false
     private var backgroundRecordingID: UIBackgroundTaskIdentifier = UIBackgroundTaskInvalid
-    private var deviceAuthorized: Bool = false
-    private var lockInterfaceRotation: Bool = false
-    private var runtimeErrorHandlingObserver: AnyObject?
     
-    private let EXPOSURE_DURATION_POWER = 5.0 // Higher numbers will give the slider more sensitivity at shorter durations
-    private let EXPOSURE_MINIMUM_DURATION = 1.0/1000 // Limit exposure duration to a useful range
-    
-    private let CONTROL_NORMAL_COLOR = UIColor.yellowColor()
-    private let CONTROL_HIGHLIGHT_COLOR = UIColor(red: 0.0, green: 122.0/255.0, blue: 1.0, alpha: 1.0) // A nice blue
-    
-    class func keyPathsForValuesAffectingSessionRunningAndDeviceAuthorized() -> Set<NSObject> {
-        return ["session.running", "deviceAuthorized"]
-    }
-    
-    @objc var sessionRunningAndDeviceAuthorized: Bool {
-        @objc(isSessionRunningAndDeviceAuthorized) get {
-            return self.session.running && self.deviceAuthorized
-        }
-    }
+    private let kExposureDurationPower = 5.0 // Higher numbers will give the slider more sensitivity at shorter durations
+    private let kExposureMinimumDuration = 1.0/1000 // Limit exposure duration to a useful range
     
     override func viewDidLoad() {
         super.viewDidLoad()
         
-        self.view.autoresizingMask = UIViewAutoresizing.FlexibleWidth | UIViewAutoresizing.FlexibleHeight
+        self.manualHUDFocusView.hidden = true
+        self.manualHUDExposureView.hidden = true
+        self.manualHUDWhiteBalanceView.hidden = true
+        self.manualHUDLensStabilizationView.hidden = true
         
-        (self.recordButton.layer.cornerRadius, self.stillButton.layer.cornerRadius, self.cameraButton.layer.cornerRadius) = (4, 4, 4)
-        (self.recordButton.clipsToBounds, self.stillButton.clipsToBounds, self.cameraButton.clipsToBounds) = (true, true, true)
+        // Create the AVCaptureSession.
+        self.session = AVCaptureSession()
         
-        // Create the AVCaptureSession
-        let session = AVCaptureSession()
-        self.session = session
+        // Setup the preview view.
+        self.previewView.session = self.session
         
-        // Set up preview
-        self.previewView.session = session
+        // Communicate with the session and other session objects on this queue.
+        self.sessionQueue = dispatch_queue_create("session queue", DISPATCH_QUEUE_SERIAL)
         
-        // Check for device authorization
-        self.checkDeviceAuthorizationStatus()
+        self.setupResult = AVCamManualSetupResult.Success
         
+        // Check video authorization status. Video access is required and audio access is optional.
+        // If audio access is denied, audio is not recorded during movie recording.
+        switch AVCaptureDevice.authorizationStatusForMediaType(AVMediaTypeVideo) {
+        case AVAuthorizationStatus.Authorized:
+            // The user has previously granted access to the camera.
+            break
+        case AVAuthorizationStatus.NotDetermined:
+            // The user has not yet been presented with the option to grant video access.
+            // We suspend the session queue to delay session setup until the access request has completed to avoid
+            // asking the user for audio access if video access is denied.
+            // Note that audio access will be implicitly requested when we create an AVCaptureDeviceInput for audio during session setup.
+            dispatch_suspend(self.sessionQueue)
+            AVCaptureDevice.requestAccessForMediaType(AVMediaTypeVideo) {granted in
+                if !granted {
+                    self.setupResult = AVCamManualSetupResult.CameraNotAuthorized
+                }
+                dispatch_resume(self.sessionQueue)
+            }
+        default:
+            // The user has previously denied access.
+            self.setupResult = AVCamManualSetupResult.CameraNotAuthorized
+        }
+        
+        // Setup the capture session.
         // In general it is not safe to mutate an AVCaptureSession or any of its inputs, outputs, or connections from multiple threads at the same time.
         // Why not do all of this on the main queue?
-        // -[AVCaptureSession startRunning] is a blocking call which can take a long time. We dispatch session setup to the sessionQueue so that the main queue isn't blocked (which keeps the UI responsive).
-        
-        let sessionQueue = dispatch_queue_create("session queue", DISPATCH_QUEUE_SERIAL)
-        self.sessionQueue = sessionQueue
-        
-        dispatch_async(sessionQueue) {
+        // Because -[AVCaptureSession startRunning] is a blocking call which can take a long time. We dispatch session setup to the sessionQueue
+        // so that the main queue isn't blocked, which keeps the UI responsive.
+        dispatch_async(self.sessionQueue) {
+            guard self.setupResult == AVCamManualSetupResult.Success else {
+                return
+            }
+            
             self.backgroundRecordingID = UIBackgroundTaskInvalid
             
-            var error: NSError? = nil
-            
-            let videoDevice = AAPLCameraViewController.deviceWithMediaType(AVMediaTypeVideo, preferringPosition: .Back)
-            let videoDeviceInput = AVCaptureDeviceInput.deviceInputWithDevice(videoDevice, error: &error) as! AVCaptureDeviceInput?
-            
-            if error != nil {
-                NSLog("%@", error!)
+            let videoDevice = AAPLCameraViewController.deviceWithMediaType(AVMediaTypeVideo, preferringPosition: AVCaptureDevicePosition.Back)
+            let videoDeviceInput: AVCaptureDeviceInput!
+            do {
+                videoDeviceInput = try AVCaptureDeviceInput(device: videoDevice)
+                
+            } catch let error as NSError {
+                videoDeviceInput = nil
+                NSLog("Could not create video device input: %@", error)
+            } catch _ {
+                videoDeviceInput = nil
+                fatalError()
             }
             
             self.session.beginConfiguration()
             
-            if session.canAddInput(videoDeviceInput) {
-                session.addInput(videoDeviceInput)
+            if self.session.canAddInput(videoDeviceInput) {
+                self.session.addInput(videoDeviceInput)
                 self.videoDeviceInput = videoDeviceInput
-                self.videoDevice = videoDeviceInput?.device
+                self.videoDevice = videoDevice
                 
                 dispatch_async(dispatch_get_main_queue()) {
                     // Why are we dispatching this to the main queue?
-                    // Because AVCaptureVideoPreviewLayer is the backing layer for our preview view and UIView can only be manipulated on main thread.
-                    // Note: As an exception to the above rule, it is not necessary to serialize video orientation changes on the AVCaptureVideoPreviewLayer’s connection with other session manipulation.
+                    // Because AVCaptureVideoPreviewLayer is the backing layer for AAPLPreviewView and UIView
+                    // can only be manipulated on the main thread.
+                    // Note: As an exception to the above rule, it is not necessary to serialize video orientation changes
+                    // on the AVCaptureVideoPreviewLayer’s connection with other session manipulation.
                     
-                    let orientation = UIApplication.sharedApplication().statusBarOrientation
-                    (self.previewView.layer as! AVCaptureVideoPreviewLayer).connection.videoOrientation = AVCaptureVideoOrientation(rawValue: orientation.rawValue)!
+                    // Use the status bar orientation as the initial video orientation. Subsequent orientation changes are handled by
+                    // -[viewWillTransitionToSize:withTransitionCoordinator:].
+                    let statusBarOrientation = UIApplication.sharedApplication().statusBarOrientation
+                    var initialVideoOrientation = AVCaptureVideoOrientation.Portrait
+                    if statusBarOrientation != UIInterfaceOrientation.Unknown {
+                        initialVideoOrientation = AVCaptureVideoOrientation(rawValue: statusBarOrientation.rawValue)!
+                    }
+                    
+                    let previewLayer = self.previewView.layer as! AVCaptureVideoPreviewLayer
+                    previewLayer.connection.videoOrientation = initialVideoOrientation
                 }
-            }
-            assert(self.videoDevice != nil, "Video capturing device is not available for this target")
-            
-            let audioDevice = AVCaptureDevice.devicesWithMediaType(AVMediaTypeAudio).first as! AVCaptureDevice?
-            let audioDeviceInput = AVCaptureDeviceInput.deviceInputWithDevice(audioDevice, error: &error) as! AVCaptureDeviceInput?
-            
-            if error != nil {
-                NSLog("%@", error!)
+            } else {
+                NSLog("Could not add video device input to the session")
+                self.setupResult = AVCamManualSetupResult.SessionConfigurationFailed
             }
             
-            if session.canAddInput(audioDeviceInput) {
-                session.addInput(audioDeviceInput)
+            let audioDevice = AVCaptureDevice.defaultDeviceWithMediaType(AVMediaTypeAudio)
+            let audioDeviceInput: AVCaptureDeviceInput!
+            do {
+                audioDeviceInput = try AVCaptureDeviceInput(device: audioDevice)
+                
+            } catch let error as NSError {
+                audioDeviceInput = nil
+                NSLog("Could not create audio device input: %@", error)
+            } catch _ {
+                audioDeviceInput = nil
+                fatalError()
+            }
+            
+            if self.session.canAddInput(audioDeviceInput) {
+                self.session.addInput(audioDeviceInput)
+            } else {
+                NSLog("Could not add audio device input to the session")
             }
             
             let movieFileOutput = AVCaptureMovieFileOutput()
-            if session.canAddOutput(movieFileOutput) {
-                session.addOutput(movieFileOutput)
+            if self.session.canAddOutput(movieFileOutput) {
+                self.session.addOutput(movieFileOutput)
                 let connection = movieFileOutput.connectionWithMediaType(AVMediaTypeVideo)
-                if connection.activeVideoStabilizationMode != .Off {
-                    connection.preferredVideoStabilizationMode = .Auto
+                if connection.supportsVideoStabilization {
+                    connection.preferredVideoStabilizationMode = AVCaptureVideoStabilizationMode.Auto
                 }
                 self.movieFileOutput = movieFileOutput
+            } else {
+                NSLog("Could not add movie file output to the session")
+                self.setupResult = AVCamManualSetupResult.SessionConfigurationFailed
             }
             
             let stillImageOutput = AVCaptureStillImageOutput()
-            if session.canAddOutput(stillImageOutput) {
-                stillImageOutput.outputSettings = [AVVideoCodecKey : AVVideoCodecJPEG]
-                session.addOutput(stillImageOutput)
+            if self.session.canAddOutput(stillImageOutput) {
+                self.session.addOutput(stillImageOutput)
                 self.stillImageOutput = stillImageOutput
+                self.stillImageOutput!.outputSettings = [AVVideoCodecKey : AVVideoCodecJPEG]
+                self.stillImageOutput!.highResolutionStillImageOutputEnabled = true
+            } else {
+                NSLog("Could not add still image output to the session")
+                self.setupResult = AVCamManualSetupResult.SessionConfigurationFailed
             }
             
             self.session.commitConfiguration()
@@ -193,27 +245,49 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
                 self.configureManualHUD()
             }
         }
-        
-        self.manualHUDFocusView.hidden = true
-        self.manualHUDExposureView.hidden = true
-        self.manualHUDWhiteBalanceView.hidden = true
     }
     
     override func viewWillAppear(animated: Bool) {
         super.viewWillAppear(animated)
         
         dispatch_async(self.sessionQueue) {
-            self.addObservers()
-            
-            self.session.startRunning()
+            switch self.setupResult {
+            case AVCamManualSetupResult.Success:
+                // Only setup observers and start the session running if setup succeeded.
+                self.addObservers()
+                self.session.startRunning()
+                self.sessionRunning = self.session.running
+            case AVCamManualSetupResult.CameraNotAuthorized:
+                dispatch_async(dispatch_get_main_queue()) {
+                    let message = NSLocalizedString("AVCamManual doesn't have permission to use the camera, please change privacy settings", comment: "Alert message when the user has denied access to the camera" )
+                    let alertController = UIAlertController(title: "AVCamManual", message: message, preferredStyle: UIAlertControllerStyle.Alert)
+                    let cancelAction = UIAlertAction(title: NSLocalizedString("OK", comment: "Alert OK button"), style: UIAlertActionStyle.Cancel, handler: nil)
+                    alertController.addAction(cancelAction)
+                    // Provide quick access to Settings.
+                    let settingsAction = UIAlertAction(title: NSLocalizedString("Settings", comment: "Alert button to open Settings"), style: UIAlertActionStyle.Default) {action in
+                        UIApplication.sharedApplication().openURL(NSURL(string: UIApplicationOpenSettingsURLString)!)
+                    }
+                    alertController.addAction(settingsAction)
+                    self.presentViewController(alertController, animated: true, completion: nil)
+                }
+            case AVCamManualSetupResult.SessionConfigurationFailed:
+                dispatch_async(dispatch_get_main_queue()) {
+                    let message = NSLocalizedString("Unable to capture media", comment: "Alert message when something goes wrong during capture session configuration")
+                    let alertController = UIAlertController(title: "AVCamManual", message: message, preferredStyle: UIAlertControllerStyle.Alert)
+                    let cancelAction = UIAlertAction(title: NSLocalizedString("OK", comment: "Alert OK button"), style: UIAlertActionStyle.Cancel, handler: nil)
+                    alertController.addAction(cancelAction)
+                    self.presentViewController(alertController, animated: true, completion: nil)
+                }
+            }
         }
     }
     
     override func viewDidDisappear(animated: Bool) {
         dispatch_async(self.sessionQueue) {
-            self.session.stopRunning()
-            
-            self.removeObservers()
+            if self.setupResult == AVCamManualSetupResult.Success {
+                self.session.stopRunning()
+                self.removeObservers()
+            }
         }
         
         super.viewDidDisappear(animated)
@@ -223,45 +297,378 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         return true
     }
     
+    //MARK: Orientation
+    
     override func shouldAutorotate() -> Bool {
         // Disable autorotation of the interface when recording is in progress.
-        return !self.lockInterfaceRotation
+        return !(self.movieFileOutput?.recording ?? false);
     }
     
-    override func supportedInterfaceOrientations() -> Int {
-        return Int(UIInterfaceOrientationMask.All.rawValue)
+    override func supportedInterfaceOrientations() -> UIInterfaceOrientationMask {
+        return UIInterfaceOrientationMask.All
     }
     
-    override func willRotateToInterfaceOrientation(toInterfaceOrientation: UIInterfaceOrientation, duration: NSTimeInterval) {
-        (self.previewView.layer as! AVCaptureVideoPreviewLayer).connection.videoOrientation = AVCaptureVideoOrientation(rawValue: toInterfaceOrientation.rawValue)!
+    override func viewWillTransitionToSize(size: CGSize, withTransitionCoordinator coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransitionToSize(size, withTransitionCoordinator: coordinator)
+        
+        // Note that the app delegate controls the device orientation notifications required to use the device orientation.
+        let deviceOrientation = UIDevice.currentDevice().orientation
+        if UIDeviceOrientationIsPortrait(deviceOrientation) || UIDeviceOrientationIsLandscape(deviceOrientation) {
+            let previewLayer = self.previewView.layer as! AVCaptureVideoPreviewLayer
+            previewLayer.connection.videoOrientation = AVCaptureVideoOrientation(rawValue: deviceOrientation.rawValue)!
+        }
     }
     
-    override func willAnimateRotationToInterfaceOrientation(toInterfaceOrientation: UIInterfaceOrientation, duration: NSTimeInterval) {
-        self.positionManualHUD()
+    //MARK: KVO and Notifications
+    
+    private func addObservers() {
+        self.addObserver(self, forKeyPath: "session.running", options: .New, context: &SessionRunningContext)
+        self.addObserver(self, forKeyPath: "stillImageOutput.capturingStillImage", options: .New, context: &CapturingStillImageContext)
+        self.addObserver(self, forKeyPath: "movieFileOutput.recording", options: .New, context: &RecordingContext)
+        
+        self.addObserver(self, forKeyPath: "videoDevice.focusMode", options: [.Old, .New], context: &FocusModeContext)
+        self.addObserver(self, forKeyPath: "videoDevice.lensPosition", options: .New, context: &LensPositionContext)
+        self.addObserver(self, forKeyPath: "videoDevice.exposureMode", options: [.Old, .New], context: &ExposureModeContext)
+        self.addObserver(self, forKeyPath: "videoDevice.exposureDuration", options: .New, context: &ExposureDurationContext)
+        self.addObserver(self, forKeyPath: "videoDevice.ISO", options: .New, context: &ISOContext)
+        self.addObserver(self, forKeyPath: "videoDevice.exposureTargetOffset", options: .New, context: &ExposureTargetOffsetContext)
+        self.addObserver(self, forKeyPath: "videoDevice.whiteBalanceMode", options: [.Old, .New], context: &WhiteBalanceModeContext)
+        self.addObserver(self, forKeyPath: "videoDevice.deviceWhiteBalanceGains", options: .New, context: &DeviceWhiteBalanceGainsContext)
+        
+        self.addObserver(self, forKeyPath: "stillImageOutput.lensStabilizationDuringBracketedCaptureEnabled", options: [.Old, .New], context: &LensStabilizationContext)
+        
+        NSNotificationCenter.defaultCenter().addObserver(self, selector: "subjectAreaDidChange:", name:AVCaptureDeviceSubjectAreaDidChangeNotification, object: self.videoDevice!)
+        NSNotificationCenter.defaultCenter().addObserver(self, selector: "sessionRuntimeError:", name:AVCaptureSessionRuntimeErrorNotification, object: self.session)
+        // A session can only run when the app is full screen. It will be interrupted in a multi-app layout, introduced in iOS 9,
+        // see also the documentation of AVCaptureSessionInterruptionReason. Add observers to handle these session interruptions
+        // and show a preview is paused message. See the documentation of AVCaptureSessionWasInterruptedNotification for other
+        // interruption reasons.
+        NSNotificationCenter.defaultCenter().addObserver(self, selector: "sessionWasInterrupted:", name:AVCaptureSessionWasInterruptedNotification, object: self.session)
+        NSNotificationCenter.defaultCenter().addObserver(self, selector: "sessionInterruptionEnded:", name:AVCaptureSessionInterruptionEndedNotification, object: self.session)
+    }
+    
+    private func removeObservers() {
+        NSNotificationCenter.defaultCenter().removeObserver(self)
+        
+        self.removeObserver(self, forKeyPath: "session.running", context: &SessionRunningContext)
+        self.removeObserver(self, forKeyPath: "stillImageOutput.capturingStillImage", context: &CapturingStillImageContext)
+        self.removeObserver(self, forKeyPath: "movieFileOutput.recording", context: &RecordingContext)
+        
+        self.removeObserver(self, forKeyPath: "videoDevice.focusMode", context: &FocusModeContext)
+        self.removeObserver(self, forKeyPath: "videoDevice.lensPosition", context: &LensPositionContext)
+        self.removeObserver(self, forKeyPath: "videoDevice.exposureMode", context: &ExposureModeContext)
+        self.removeObserver(self, forKeyPath: "videoDevice.exposureDuration", context: &ExposureDurationContext)
+        self.removeObserver(self, forKeyPath: "videoDevice.ISO", context: &ISOContext)
+        
+        self.removeObserver(self, forKeyPath: "videoDevice.exposureTargetOffset", context: &ExposureTargetOffsetContext)
+        self.removeObserver(self, forKeyPath: "videoDevice.whiteBalanceMode", context: &WhiteBalanceModeContext)
+        self.removeObserver(self, forKeyPath: "videoDevice.deviceWhiteBalanceGains", context: &DeviceWhiteBalanceGainsContext)
+        
+        self.removeObserver(self, forKeyPath: "stillImageOutput.lensStabilizationDuringBracketedCaptureEnabled", context: &LensStabilizationContext)
+    }
+    
+    override func observeValueForKeyPath(keyPath: String?, ofObject object: AnyObject?, change: [NSObject : AnyObject]?, context: UnsafeMutablePointer<Void>) {
+        let oldValue: AnyObject? = change![NSKeyValueChangeOldKey]
+        let newValue: AnyObject? = change![NSKeyValueChangeNewKey]
+        
+        switch context {
+        case &FocusModeContext:
+            if let value = newValue where value !== NSNull() {
+                let newMode = AVCaptureFocusMode(rawValue: value as! Int)!
+                self.focusModeControl.selectedSegmentIndex = self.focusModes.indexOf(newMode) ?? 0
+                self.lensPositionSlider.enabled = (newMode == AVCaptureFocusMode.Locked)
+                
+                if let old = oldValue where old !== NSNull() {
+                    let oldMode = AVCaptureFocusMode(rawValue: old as! Int)!
+                    NSLog("focus mode: %@ -> %@", self.stringFromFocusMode(oldMode), self.stringFromFocusMode(newMode))
+                } else {
+                    NSLog("focus mode: %@", self.stringFromFocusMode(newMode))
+                }
+            }
+        case &LensPositionContext:
+            if let value = newValue where value !== NSNull() {
+                let newLensPosition = value as! Float
+                
+                if self.videoDevice!.focusMode != AVCaptureFocusMode.Locked {
+                    self.lensPositionSlider.value = newLensPosition
+                }
+                self.lensPositionValueLabel.text = String(format: "%.1f", Double(newLensPosition))
+            }
+        case &ExposureModeContext:
+            if let value = newValue where value !== NSNull() {
+                let newMode = AVCaptureExposureMode(rawValue: value as! Int)!
+                
+                self.exposureModeControl.selectedSegmentIndex = self.exposureModes.indexOf(newMode) ?? 0
+                self.exposureDurationSlider.enabled = (newMode == .Custom)
+                self.ISOSlider.enabled = (newMode == .Custom)
+                
+                if let old = oldValue where oldValue !== NSNull() {
+                    let oldMode = AVCaptureExposureMode(rawValue: old as! Int)!
+                    /*
+                    It’s important to understand the relationship between exposureDuration and the minimum frame rate as represented by activeVideoMaxFrameDuration.
+                    In manual mode, if exposureDuration is set to a value that's greater than activeVideoMaxFrameDuration, then activeVideoMaxFrameDuration will
+                    increase to match it, thus lowering the minimum frame rate. If exposureMode is then changed to automatic mode, the minimum frame rate will
+                    remain lower than its default. If this is not the desired behavior, the min and max frameRates can be reset to their default values for the
+                    current activeFormat by setting activeVideoMaxFrameDuration and activeVideoMinFrameDuration to kCMTimeInvalid.
+                    */
+                    if oldMode != newMode && oldMode == AVCaptureExposureMode.Custom {
+                        do {
+                            try self.videoDevice!.lockForConfiguration()
+                            defer {self.videoDevice!.unlockForConfiguration()}
+                            self.videoDevice!.activeVideoMaxFrameDuration = kCMTimeInvalid
+                            self.videoDevice!.activeVideoMinFrameDuration = kCMTimeInvalid
+                        } catch let error as NSError {
+                            NSLog("Could not lock device for configuration: %@", error)
+                        } catch _ {}
+                    }
+                    NSLog("exposure mode: \(stringFromExposureMode(oldMode)) -> \(stringFromExposureMode(newMode))")
+                }
+            }
+        case &ExposureDurationContext:
+            // Map from duration to non-linear UI range 0-1
+            
+            if let value = newValue where value !== NSNull() {
+                let newDurationSeconds = CMTimeGetSeconds(value.CMTimeValue!)
+                if self.videoDevice!.exposureMode != .Custom {
+                    let minDurationSeconds = max(CMTimeGetSeconds(self.videoDevice!.activeFormat.minExposureDuration), kExposureMinimumDuration)
+                    let maxDurationSeconds = CMTimeGetSeconds(self.videoDevice!.activeFormat.maxExposureDuration)
+                    // Map from duration to non-linear UI range 0-1
+                    let p = (newDurationSeconds - minDurationSeconds) / (maxDurationSeconds - minDurationSeconds) // Scale to 0-1
+                    self.exposureDurationSlider.value = Float(pow(p, 1 / kExposureDurationPower)) // Apply inverse power
+                    
+                    if newDurationSeconds < 1 {
+                        let digits = Int32(max(0, 2 + floor(log10(newDurationSeconds))))
+                        self.exposureDurationValueLabel.text = String(format: "1/%.*f", digits, 1/newDurationSeconds)
+                    } else {
+                        self.exposureDurationValueLabel.text = String(format: "%.2f", newDurationSeconds)
+                    }
+                }
+            }
+        case &ISOContext:
+            if let value = newValue where value !== NSNull() {
+                let newISO = value as! Float
+                
+                if self.videoDevice!.exposureMode != .Custom {
+                    self.ISOSlider.value = newISO
+                }
+                self.ISOValueLabel.text = String(Int(newISO))
+            }
+        case &ExposureTargetOffsetContext:
+            if let value = newValue where value !== NSNull() {
+                let newExposureTargetOffset = value as! Float
+                
+                self.exposureTargetOffsetSlider.value = newExposureTargetOffset
+                self.exposureTargetOffsetValueLabel.text = String(format: "%.1f", Double(newExposureTargetOffset))
+            }
+        case &WhiteBalanceModeContext:
+            if let value = newValue where value !== NSNull() {
+                let newMode = AVCaptureWhiteBalanceMode(rawValue: value as! Int)!
+                
+                self.whiteBalanceModeControl.selectedSegmentIndex = self.whiteBalanceModes.indexOf(newMode) ?? 0
+                self.temperatureSlider.enabled = (newMode == .Locked)
+                self.tintSlider.enabled = (newMode == .Locked)
+                
+                if let old = oldValue where old !== NSNull() {
+                    let oldMode = AVCaptureWhiteBalanceMode(rawValue: old as! Int)!
+                    NSLog("white balance mode: \(stringFromWhiteBalanceMode(oldMode)) -> \(stringFromWhiteBalanceMode(newMode))")
+                }
+            }
+        case &DeviceWhiteBalanceGainsContext:
+            if let value = newValue where value !== NSNull() {
+                var newGains = AVCaptureWhiteBalanceGains()
+                (value as! NSValue).getValue(&newGains)
+                let newTemperatureAndTint = self.videoDevice!.temperatureAndTintValuesForDeviceWhiteBalanceGains(newGains)
+                
+                if self.videoDevice!.whiteBalanceMode != .Locked {
+                    self.temperatureSlider.value = newTemperatureAndTint.temperature
+                    self.tintSlider.value = newTemperatureAndTint.tint
+                }
+                self.temperatureValueLabel.text = String(Int(newTemperatureAndTint.temperature))
+                self.tintValueLabel.text = String(Int(newTemperatureAndTint.tint))
+            }
+        case &CapturingStillImageContext:
+            var isCapturingStillImage = false
+            if let value = newValue where value !== NSNull() {
+                isCapturingStillImage = value as! Bool
+            }
+            
+            if isCapturingStillImage {
+                dispatch_async(dispatch_get_main_queue()) {
+                    self.previewView.layer.opacity = 0.0
+                    UIView.animateWithDuration(0.25) {
+                        self.previewView.layer.opacity = 1.0
+                    }
+                }
+            }
+        case &RecordingContext:
+            var isRecording = false
+            if let value = newValue where value !== NSNull() {
+                isRecording = value as! Bool
+            }
+            
+            dispatch_async(dispatch_get_main_queue()) {
+                if isRecording {
+                    self.cameraButton.enabled = false
+                    self.recordButton.enabled = true
+                    self.recordButton.setTitle(NSLocalizedString("Stop", comment: "Recording button stop title"), forState: .Normal)
+                } else {
+                    // Only enable the ability to change camera if the device has more than one camera.
+                    self.cameraButton.enabled = (AVCaptureDevice.devicesWithMediaType(AVMediaTypeVideo).count > 1)
+                    self.recordButton.enabled = true
+                    self.recordButton.setTitle(NSLocalizedString("Record", comment: "Recording button record title"), forState: .Normal)
+                }
+            }
+        case &SessionRunningContext:
+            var isRunning = false
+            if let value = newValue where value !== NSNull() {
+                isRunning = value as! Bool
+            }
+            
+            dispatch_async(dispatch_get_main_queue()) {
+                self.cameraButton.enabled = (isRunning && AVCaptureDevice.devicesWithMediaType(AVMediaTypeVideo).count > 1)
+                self.recordButton.enabled = isRunning
+                self.stillButton.enabled = isRunning
+            }
+        case &LensStabilizationContext:
+            if let value = newValue where value !== NSNull() {
+                let newMode = value as! Bool
+                self.lensStabilizationControl.selectedSegmentIndex = (newMode ? 1 : 0)
+                if let old = oldValue where old !== NSNull() {
+                    let oldMode = old as! Bool
+                    NSLog("Lens stabilization: %@ -> %@", (oldMode ? "YES" : "NO"), (newMode ? "YES" : "NO"))
+                }
+            }
+        default:
+            super.observeValueForKeyPath(keyPath, ofObject: object, change: change, context: context)
+        }
+    }
+    
+    func subjectAreaDidChange(notificaiton: NSNotification) {
+        let devicePoint = CGPointMake(0.5, 0.5)
+        self.focusWithMode(.ContinuousAutoFocus, exposeWithMode: .ContinuousAutoExposure, atDevicePoint: devicePoint, monitorSubjectAreaChange: false)
+    }
+    
+    func sessionRuntimeError(notification: NSNotification) {
+        let error = notification.userInfo![AVCaptureSessionErrorKey]! as! NSError
+        NSLog("Capture session runtime error: %@", error)
+        
+        if error.code == AVError.MediaServicesWereReset.rawValue {
+            dispatch_async(self.sessionQueue) {
+                // If we aren't trying to resume the session running, then try to restart it since it must have been stopped due to an error. See also -[resumeInterruptedSession:].
+                if self.sessionRunning {
+                    self.session.startRunning()
+                    self.sessionRunning = self.session.running
+                } else {
+                    dispatch_async(dispatch_get_main_queue()) {
+                        self.resumeButton.hidden = false
+                    }
+                }
+            }
+        } else {
+            self.resumeButton.hidden = false
+        }
+    }
+    
+    @available(iOS 9.0, *)
+    func sessionWasInterrupted(notification: NSNotification) {
+        // In some scenarios we want to enable the user to resume the session running.
+        // For example, if music playback is initiated via control center while using AVCamManual,
+        // then the user can let AVCamManual resume the session running, which will stop music playback.
+        // Note that stopping music playback in control center will not automatically resume the session running.
+        // Also note that it is not always possible to resume, see -[resumeInterruptedSession:].
+        
+        // In iOS 9 and later, the userInfo dictionary contains information on why the session was interrupted.
+        let reason = AVCaptureSessionInterruptionReason(rawValue: notification.userInfo![AVCaptureSessionInterruptionReasonKey]! as! Int)!
+        NSLog("Capture session was interrupted with reason %ld", reason.rawValue)
+        
+        if reason == AVCaptureSessionInterruptionReason.AudioDeviceInUseByAnotherClient ||
+            reason == AVCaptureSessionInterruptionReason.VideoDeviceInUseByAnotherClient {
+                // Simply fade-in a button to enable the user to try to resume the session running.
+                self.resumeButton.hidden = false
+                self.resumeButton.alpha = 0.0
+                UIView.animateWithDuration(0.25) {
+                    self.resumeButton.alpha = 1.0
+                }
+        } else if reason == AVCaptureSessionInterruptionReason.VideoDeviceNotAvailableWithMultipleForegroundApps {
+            // Simply fade-in a label to inform the user that the camera is unavailable.
+            self.cameraUnavailableLabel.hidden = false
+            self.cameraUnavailableLabel.alpha = 0.0
+            UIView.animateWithDuration(0.25) {
+                self.cameraUnavailableLabel.alpha = 1.0
+            }
+        }
+    }
+    
+    func sessionInterruptionEnded(notification: NSNotification) {
+        NSLog("Capture session interruption ended")
+        
+        if !self.resumeButton.hidden {
+            UIView.animateWithDuration(0.25, animations: {
+                self.resumeButton.alpha = 0.0
+                }, completion: {finished in
+                    self.resumeButton.hidden = true
+            })
+        }
+        if !self.cameraUnavailableLabel.hidden {
+            UIView.animateWithDuration(0.25, animations: {
+                self.cameraUnavailableLabel.alpha = 0.0
+                }, completion: {finished in
+                    self.cameraUnavailableLabel.hidden = true
+            })
+        }
     }
     
     //MARK: Actions
+    
+    @IBAction func resumeInterruptedSession(AnyObject) {
+        dispatch_async(self.sessionQueue) {
+            // The session might fail to start running, e.g., if a phone or FaceTime call is still using audio or video.
+            // A failure to start the session running will be communicated via a session runtime error notification.
+            // To avoid repeatedly failing to start the session running, we only try to restart the session running in the
+            // session runtime error handler if we aren't trying to resume the session running.
+            self.session.startRunning()
+            self.sessionRunning = self.session.running
+            if !self.session.running {
+                dispatch_async(dispatch_get_main_queue()) {
+                    let message = NSLocalizedString("Unable to resume", comment: "Alert message when unable to resume the session running" )
+                    let alertController = UIAlertController(title: "AVCamManual", message: message, preferredStyle: UIAlertControllerStyle.Alert)
+                    let cancelAction = UIAlertAction(title: NSLocalizedString("OK", comment: "Alert OK button"), style: UIAlertActionStyle.Cancel, handler: nil)
+                    alertController.addAction(cancelAction)
+                    self.presentViewController(alertController, animated: true, completion: nil)
+                }
+            } else {
+                dispatch_async(dispatch_get_main_queue()) {
+                    self.resumeButton.hidden = true
+                }
+            }
+        }
+    }
     
     @IBAction func toggleMovieRecording(AnyObject) {
         self.recordButton.enabled = false
         
         dispatch_async(self.sessionQueue) {
             if !(self.movieFileOutput?.recording ?? false) {
-                self.lockInterfaceRotation = true
-                
                 if UIDevice.currentDevice().multitaskingSupported {
-                    // Setup background task. This is needed because the captureOutput:didFinishRecordingToOutputFileAtURL: callback is not received until the app returns to the foreground unless you request background execution time. This also ensures that there will be time to write the file to the assets library when the app is backgrounded. To conclude this background execution, -endBackgroundTask is called in -recorder:recordingDidFinishToOutputFileURL:error: after the recorded file has been saved.
-                    self.backgroundRecordingID = UIApplication.sharedApplication().beginBackgroundTaskWithExpirationHandler{}
+                    // Setup background task. This is needed because the -[captureOutput:didFinishRecordingToOutputFileAtURL:fromConnections:error:]
+                    // callback is not received until AVCamManual returns to the foreground unless you request background execution time.
+                    // This also ensures that there will be time to write the file to the photo library when AVCamManual is backgrounded.
+                    // To conclude this background execution, -endBackgroundTask is called in
+                    // -[captureOutput:didFinishRecordingToOutputFileAtURL:fromConnections:error:] after the recorded file has been saved.
+                    self.backgroundRecordingID = UIApplication.sharedApplication().beginBackgroundTaskWithExpirationHandler(nil)
                 }
                 
                 // Update the orientation on the movie file output video connection before starting recording.
-                self.movieFileOutput!.connectionWithMediaType(AVMediaTypeVideo).videoOrientation = (self.previewView.layer as! AVCaptureVideoPreviewLayer).connection.videoOrientation
+                let movieConnection = self.movieFileOutput!.connectionWithMediaType(AVMediaTypeVideo)
+                let previewLayer = self.previewView.layer as! AVCaptureVideoPreviewLayer
+                movieConnection.videoOrientation = previewLayer.connection.videoOrientation
                 
-                // Turn OFF flash for video recording
+                // Turn OFF flash for video recording.
                 AAPLCameraViewController.setFlashMode(.Off, forDevice: self.videoDevice!)
                 
                 // Start recording to a temporary file.
-                let outputFilePath = NSTemporaryDirectory().stringByAppendingPathComponent("movie.mov")
+                let outputFileName = NSProcessInfo.processInfo().globallyUniqueString
+                let outputFilePath = NSTemporaryDirectory().stringByAppendingPathComponent(outputFileName.stringByAppendingPathExtension("mov")!)
                 self.movieFileOutput!.startRecordingToOutputFileURL(NSURL(fileURLWithPath: outputFilePath), recordingDelegate: self)
             } else {
                 self.movieFileOutput!.stopRecording()
@@ -275,36 +682,44 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         self.stillButton.enabled = false
         
         dispatch_async(self.sessionQueue) {
-            let currentVideoDevice = self.videoDevice!
             var preferredPosition = AVCaptureDevicePosition.Unspecified
-            let currentPosition = currentVideoDevice.position
             
-            switch currentPosition {
-            case .Unspecified:
+            switch self.videoDevice!.position {
+            case .Unspecified,
+            .Front:
                 preferredPosition = .Back
             case .Back:
                 preferredPosition = .Front
-            case .Front:
-                preferredPosition = .Back
             }
             
             let newVideoDevice = AAPLCameraViewController.deviceWithMediaType(AVMediaTypeVideo, preferringPosition: preferredPosition)
-            let newVideoDeviceInput = AVCaptureDeviceInput.deviceInputWithDevice(newVideoDevice, error: nil) as! AVCaptureDeviceInput
+            let newVideoDeviceInput: AVCaptureDeviceInput!
+            do {
+                newVideoDeviceInput = try AVCaptureDeviceInput(device: newVideoDevice)
+            } catch _ {
+                newVideoDeviceInput = nil
+            }
             
             self.session.beginConfiguration()
             
+            // Remove the existing device input first, since using the front and back camera simultaneously is not supported.
             self.session.removeInput(self.videoDeviceInput)
             if self.session.canAddInput(newVideoDeviceInput) {
                 NSNotificationCenter.defaultCenter().removeObserver(self,
-                    name: AVCaptureDeviceSubjectAreaDidChangeNotification, object: currentVideoDevice)
+                    name: AVCaptureDeviceSubjectAreaDidChangeNotification, object: self.videoDevice)
                 
                 NSNotificationCenter.defaultCenter().addObserver(self, selector: "subjectAreaDidChange:", name: AVCaptureDeviceSubjectAreaDidChangeNotification, object: newVideoDevice)
                 
                 self.session.addInput(newVideoDeviceInput)
                 self.videoDeviceInput = newVideoDeviceInput
-                self.videoDevice = newVideoDeviceInput.device
+                self.videoDevice = newVideoDevice
             } else {
                 self.session.addInput(self.videoDeviceInput)
+            }
+            
+            let connection = self.movieFileOutput!.connectionWithMediaType(AVMediaTypeVideo)
+            if connection.supportsVideoStabilization {
+                connection.preferredVideoStabilizationMode = AVCaptureVideoStabilizationMode.Auto
             }
             
             self.session.commitConfiguration()
@@ -321,8 +736,11 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
     
     @IBAction func snapStillImage(AnyObject) {
         dispatch_async(self.sessionQueue) {
+            let stillImageConnection = self.stillImageOutput!.connectionWithMediaType(AVMediaTypeVideo)
+            let previewLayer = self.previewView.layer as! AVCaptureVideoPreviewLayer
+            
             // Update the orientation on the still image output video connection before capturing.
-            self.stillImageOutput?.connectionWithMediaType(AVMediaTypeVideo).videoOrientation = (self.previewView.layer as! AVCaptureVideoPreviewLayer).connection.videoOrientation
+            stillImageConnection.videoOrientation = previewLayer.connection.videoOrientation
             
             // Flash set to Auto for Still Capture
             if self.videoDevice!.exposureMode == .Custom {
@@ -331,13 +749,59 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
                 AAPLCameraViewController.setFlashMode(.Auto, forDevice: self.videoDevice!)
             }
             
-            // Capture a still image
-            self.stillImageOutput?.captureStillImageAsynchronouslyFromConnection(self.stillImageOutput!.connectionWithMediaType(AVMediaTypeVideo)) {imageDataSampleBuffer, error in
+            if !self.stillImageOutput!.lensStabilizationDuringBracketedCaptureEnabled {
+                // Capture a still image
+                self.stillImageOutput?.captureStillImageAsynchronouslyFromConnection(self.stillImageOutput!.connectionWithMediaType(AVMediaTypeVideo)) {imageDataSampleBuffer, error in
+                    
+                    if error != nil {
+                        NSLog("Error capture still image %@", error!)
+                    } else if imageDataSampleBuffer != nil {
+                        let imageData = AVCaptureStillImageOutput.jpegStillImageNSDataRepresentation(imageDataSampleBuffer)!
+                        
+                        PHPhotoLibrary.requestAuthorization {status in
+                            if status == PHAuthorizationStatus.Authorized {
+                                PHPhotoLibrary.sharedPhotoLibrary().performChanges({
+                                    PHAssetCreationRequest.creationRequestForAsset().addResourceWithType(PHAssetResourceType.Photo, data: imageData, options: nil)
+                                }, completionHandler: {success, error in
+                                        if !success {
+                                            NSLog("Error occured while saving image to photo library: %@", error!)
+                                        }
+                                })
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Capture a bracket
+                let bracketSettings: [AVCaptureBracketedStillImageSettings]
+                if self.videoDevice!.exposureMode == AVCaptureExposureMode.Custom {
+                    bracketSettings = [AVCaptureManualExposureBracketedStillImageSettings.manualExposureSettingsWithExposureDuration(AVCaptureExposureDurationCurrent, ISO: AVCaptureISOCurrent)]
+                } else {
+                    bracketSettings = [AVCaptureAutoExposureBracketedStillImageSettings.autoExposureSettingsWithExposureTargetBias(AVCaptureExposureTargetBiasCurrent)];
+                }
                 
-                if imageDataSampleBuffer != nil {
-                    let imageData = AVCaptureStillImageOutput.jpegStillImageNSDataRepresentation(imageDataSampleBuffer)!
-                    let image = UIImage(data: imageData)!
-                    ALAssetsLibrary().writeImageToSavedPhotosAlbum(image.CGImage, orientation: ALAssetOrientation(rawValue: image.imageOrientation.rawValue)!, completionBlock: nil)
+                self.stillImageOutput!.captureStillImageBracketAsynchronouslyFromConnection(self.stillImageOutput!.connectionWithMediaType(AVMediaTypeVideo),
+                    withSettingsArray: bracketSettings
+                    
+                    ) {imageDataSampleBuffer, stillImageSettings, error in
+                        if error != nil {
+                            NSLog("Error bracketing capture still image %@", error!)
+                        } else if imageDataSampleBuffer != nil {
+                            NSLog("Lens Stabilization State: \(CMGetAttachment(imageDataSampleBuffer, kCMSampleBufferAttachmentKey_StillImageLensStabilizationInfo, nil)!.takeUnretainedValue())")
+                            let imageData = AVCaptureStillImageOutput.jpegStillImageNSDataRepresentation(imageDataSampleBuffer)
+                            
+                            PHPhotoLibrary.requestAuthorization {status in
+                                if status == PHAuthorizationStatus.Authorized {
+                                    PHPhotoLibrary.sharedPhotoLibrary().performChanges({
+                                        PHAssetCreationRequest.creationRequestForAsset().addResourceWithType(PHAssetResourceType.Photo, data: imageData, options: nil)
+                                    }, completionHandler: {success, error in
+                                            if !success {
+                                                NSLog("Error occured while saving image to photo library: %@", error!)
+                                            }
+                                    })
+                                }
+                            }
+                        }
                 }
             }
         }
@@ -352,78 +816,76 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
     
     @IBAction func changeManualHUD(control: UISegmentedControl) {
         
-        self.positionManualHUD()
-        
-        self.manualHUDFocusView.hidden = (control.selectedSegmentIndex == 1) ? false : true
-        self.manualHUDExposureView.hidden = (control.selectedSegmentIndex == 2) ? false : true
-        self.manualHUDWhiteBalanceView.hidden = (control.selectedSegmentIndex == 3) ? false : true
+        self.manualHUDFocusView.hidden = (control.selectedSegmentIndex != 1)
+        self.manualHUDExposureView.hidden = (control.selectedSegmentIndex != 2)
+        self.manualHUDWhiteBalanceView.hidden = (control.selectedSegmentIndex != 3)
+        self.manualHUDLensStabilizationView.hidden = (control.selectedSegmentIndex != 4)
     }
     
     @IBAction func changeFocusMode(control: UISegmentedControl) {
         let mode = self.focusModes[control.selectedSegmentIndex]
-        var error: NSError? = nil
         
-        if self.videoDevice!.lockForConfiguration(&error) {
+        do {
+            try self.videoDevice!.lockForConfiguration()
             if self.videoDevice!.isFocusModeSupported(mode) {
                 self.videoDevice!.focusMode = mode
             } else {
                 NSLog("Focus mode %@ is not supported. Focus mode is %@.", self.stringFromFocusMode(mode), self.stringFromFocusMode(self.videoDevice!.focusMode))
-                self.focusModeControl.selectedSegmentIndex = find(self.focusModes, self.videoDevice!.focusMode)!
+                self.focusModeControl.selectedSegmentIndex = self.focusModes.indexOf(self.videoDevice!.focusMode)!
             }
             self.videoDevice!.unlockForConfiguration()
-        } else {
-            NSLog("%@", error!)
+        } catch let error as NSError {
+            NSLog("Could not lock device for configuration: %@", error)
         }
     }
+    
     @IBAction func changeExposureMode(control: UISegmentedControl) {
-        var error: NSError? = nil
         let mode = self.exposureModes[control.selectedSegmentIndex]
         
-        if self.videoDevice!.lockForConfiguration(&error) {
+        do {
+            try self.videoDevice!.lockForConfiguration()
             if self.videoDevice!.isExposureModeSupported(mode) {
                 self.videoDevice!.exposureMode = mode
             } else {
                 NSLog("Exposure mode %@ is not supported. Exposure mode is %@.", self.stringFromExposureMode(mode), self.stringFromExposureMode(self.videoDevice!.exposureMode))
             }
             self.videoDevice!.unlockForConfiguration()
-        } else {
-            NSLog("%@", error!)
+        } catch let error as NSError {
+            NSLog("Could not lock device for configuration: %@", error)
         }
     }
     
     @IBAction func changeWhiteBalanceMode(control: UISegmentedControl) {
         let mode = self.whiteBalanceModes[control.selectedSegmentIndex]
-        var error: NSError? = nil
         
-        if self.videoDevice!.lockForConfiguration(&error) {
+        do {
+            try self.videoDevice!.lockForConfiguration()
             if self.videoDevice!.isWhiteBalanceModeSupported(mode) {
                 self.videoDevice!.whiteBalanceMode = mode
             } else {
                 NSLog("White balance mode %@ is not supported. White balance mode is %@.", self.stringFromWhiteBalanceMode(mode), self.stringFromWhiteBalanceMode(self.videoDevice!.whiteBalanceMode))
             }
             self.videoDevice!.unlockForConfiguration()
-        } else {
-            NSLog("%@", error!)
+        } catch let error as NSError {
+            NSLog("Could not lock device for configuration: %@", error)
         }
     }
     
     @IBAction func changeLensPosition(control: UISlider) {
-        var error: NSError? = nil
         
-        if self.videoDevice!.isFocusModeSupported(.Locked)
-            && self.videoDevice!.lockForConfiguration(&error)  {
-                self.videoDevice!.setFocusModeLockedWithLensPosition(control.value, completionHandler: nil)
-                self.videoDevice!.unlockForConfiguration()
-        } else {
-            NSLog("%@", error!)
+        do {
+            try self.videoDevice!.lockForConfiguration()
+            self.videoDevice!.setFocusModeLockedWithLensPosition(control.value, completionHandler: nil)
+            self.videoDevice!.unlockForConfiguration()
+        } catch let error as NSError {
+            NSLog("Could not lock device for configuration: %@", error)
         }
     }
     
     @IBAction func changeExposureDuration(control: UISlider) {
-        var error: NSError? = nil
         
-        let p = pow(Double(control.value), EXPOSURE_DURATION_POWER) // Apply power function to expand slider's low-end range
-        let minDurationSeconds = max(CMTimeGetSeconds(self.videoDevice!.activeFormat.minExposureDuration), EXPOSURE_MINIMUM_DURATION)
+        let p = pow(Double(control.value), kExposureDurationPower) // Apply power function to expand slider's low-end range
+        let minDurationSeconds = max(CMTimeGetSeconds(self.videoDevice!.activeFormat.minExposureDuration), kExposureMinimumDuration)
         let maxDurationSeconds = CMTimeGetSeconds(self.videoDevice!.activeFormat.maxExposureDuration)
         let newDurationSeconds = p * ( maxDurationSeconds - minDurationSeconds ) + minDurationSeconds; // Scale from 0-1 slider range to actual duration
         
@@ -436,34 +898,35 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
             }
         }
         
-        if self.videoDevice!.lockForConfiguration(&error) {
+        do {
+            try self.videoDevice!.lockForConfiguration()
             self.videoDevice!.setExposureModeCustomWithDuration(CMTimeMakeWithSeconds(newDurationSeconds, 1000*1000*1000), ISO: AVCaptureISOCurrent, completionHandler: nil)
             self.videoDevice!.unlockForConfiguration()
-        } else {
-            NSLog("%@", error!)
+        } catch let error as NSError {
+            NSLog("Could not lock device for configuration: %@", error)
         }
     }
     
     @IBAction func changeISO(control: UISlider) {
-        var error: NSError? = nil
         
-        if self.videoDevice!.lockForConfiguration(&error) {
+        do {
+            try self.videoDevice!.lockForConfiguration()
             self.videoDevice!.setExposureModeCustomWithDuration(AVCaptureExposureDurationCurrent, ISO: control.value, completionHandler: nil)
             self.videoDevice!.unlockForConfiguration()
-        } else {
-            NSLog("%@", error!)
+        } catch let error as NSError {
+            NSLog("Could not lock device for configuration: %@", error)
         }
     }
     
     @IBAction func changeExposureTargetBias(control: UISlider) {
-        var error: NSError? = nil
         
-        if self.videoDevice!.lockForConfiguration(&error) {
+        do {
+            try self.videoDevice!.lockForConfiguration()
             self.videoDevice!.setExposureTargetBias(control.value, completionHandler: nil)
             self.videoDevice!.unlockForConfiguration()
             self.exposureTargetBiasValueLabel.text = String(format:"%.1f", Double(control.value))
-        } else {
-            NSLog("%@", error!)
+        } catch let error as NSError {
+            NSLog("Could not lock device for configuration: %@", error)
         }
     }
     
@@ -489,50 +952,76 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         self.setWhiteBalanceGains(self.videoDevice!.grayWorldDeviceWhiteBalanceGains)
     }
     
-    @IBAction func sliderTouchBegan(slider: UISlider) {
-        self.setSlider(slider, highlightColor: CONTROL_HIGHLIGHT_COLOR)
-    }
-    
-    @IBAction func sliderTouchEnded(slider: UISlider) {
-        self.setSlider(slider, highlightColor: CONTROL_NORMAL_COLOR)
-    }
-    
-    //MARK: UI
-    
-    private func runStillImageCaptureAnimation() {
-        dispatch_async(dispatch_get_main_queue()) {
-            self.previewView.layer.opacity = 0.0
-            UIView.animateWithDuration(0.25) {
-                self.previewView.layer.opacity = 1.0
+    @IBAction func changeLensStabilization(control: UISegmentedControl) {
+        let lensStabilizationDuringBracketedCaptureEnabled = (control.selectedSegmentIndex != 0)
+        if lensStabilizationDuringBracketedCaptureEnabled {
+            self.stillButton.enabled = false
+        }
+        dispatch_async(self.sessionQueue) {
+            if self.stillImageOutput!.lensStabilizationDuringBracketedCaptureSupported {
+                if lensStabilizationDuringBracketedCaptureEnabled {
+                    // Still image capture will be done with the bracketed capture API.
+                    self.stillImageOutput!.lensStabilizationDuringBracketedCaptureEnabled = true
+                    let bracketSettings: [AVCaptureBracketedStillImageSettings]
+                    if self.videoDevice!.exposureMode == AVCaptureExposureMode.Custom {
+                        bracketSettings = [AVCaptureManualExposureBracketedStillImageSettings.manualExposureSettingsWithExposureDuration(AVCaptureExposureDurationCurrent, ISO: AVCaptureISOCurrent)]
+                    } else {
+                        bracketSettings = [AVCaptureAutoExposureBracketedStillImageSettings.autoExposureSettingsWithExposureTargetBias(AVCaptureExposureTargetBiasCurrent)]
+                    }
+                    self.stillImageOutput!.prepareToCaptureStillImageBracketFromConnection(self.stillImageOutput!.connectionWithMediaType(AVMediaTypeVideo),
+                        withSettingsArray: bracketSettings
+                        ) {prepared, error in
+                            if error != nil {
+                                NSLog("Error preparing for bracketed capture %@", error!)
+                            }
+                            dispatch_async(dispatch_get_main_queue()) {
+                                self.stillButton.enabled = true
+                            }
+                    }
+                } else {
+                    self.stillImageOutput!.lensStabilizationDuringBracketedCaptureEnabled = false
+                }
             }
         }
     }
+    
+    @IBAction func sliderTouchBegan(slider: UISlider) {
+        self.setSlider(slider, highlightColor: UIColor(red: 0.0, green: 122.0/255.0, blue: 1.0, alpha: 1.0))
+    }
+    
+    @IBAction func sliderTouchEnded(slider: UISlider) {
+        self.setSlider(slider, highlightColor: UIColor.yellowColor())
+    }
+    
+    //MARK: UI
     
     private func configureManualHUD() {
         // Manual focus controls
         self.focusModes = [.ContinuousAutoFocus, .Locked]
         
-        self.focusModeControl.selectedSegmentIndex = find(self.focusModes, self.videoDevice!.focusMode)!
+        self.focusModeControl.enabled = (self.videoDevice != nil)
+        self.focusModeControl.selectedSegmentIndex = self.focusModes.indexOf(self.videoDevice!.focusMode)!
         for mode in self.focusModes {
-            self.focusModeControl.setEnabled(self.videoDevice!.isFocusModeSupported(mode), forSegmentAtIndex: find(self.focusModes, mode)!)
+            self.focusModeControl.setEnabled(self.videoDevice!.isFocusModeSupported(mode), forSegmentAtIndex: self.focusModes.indexOf(mode)!)
         }
         
         self.lensPositionSlider.minimumValue = 0.0
         self.lensPositionSlider.maximumValue = 1.0
-        self.lensPositionSlider.enabled = (self.videoDevice!.isFocusModeSupported(.Locked) && self.videoDevice!.focusMode == .Locked)
+        self.lensPositionSlider.enabled = (self.videoDevice != nil && self.videoDevice!.isFocusModeSupported(.Locked) && self.videoDevice!.focusMode == .Locked)
         
         // Manual exposure controls
         self.exposureModes = [.ContinuousAutoExposure, .Locked, .Custom]
         
-        self.exposureModeControl.selectedSegmentIndex = find(self.exposureModes, self.videoDevice!.exposureMode)!
+        self.exposureModeControl.enabled = (self.videoDevice != nil)
+        self.exposureModeControl.selectedSegmentIndex = self.exposureModes.indexOf(self.videoDevice!.exposureMode)!
         for mode in self.exposureModes {
-            self.exposureModeControl.setEnabled(self.videoDevice!.isExposureModeSupported(mode), forSegmentAtIndex: find(self.exposureModes, mode)!)
+            self.exposureModeControl.setEnabled(self.videoDevice!.isExposureModeSupported(mode), forSegmentAtIndex: self.exposureModes.indexOf(mode)!)
         }
         
         // Use 0-1 as the slider range and do a non-linear mapping from the slider value to the actual device exposure duration
         self.exposureDurationSlider.minimumValue = 0
         self.exposureDurationSlider.maximumValue = 1
-        self.exposureDurationSlider.enabled = (self.videoDevice!.exposureMode == .Custom)
+        self.exposureDurationSlider.enabled = (self.videoDevice != nil && self.videoDevice!.exposureMode == .Custom)
         
         self.ISOSlider.minimumValue = self.videoDevice!.activeFormat.minISO
         self.ISOSlider.maximumValue = self.videoDevice!.activeFormat.maxISO
@@ -540,7 +1029,7 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         
         self.exposureTargetBiasSlider.minimumValue = self.videoDevice!.minExposureTargetBias
         self.exposureTargetBiasSlider.maximumValue = self.videoDevice!.maxExposureTargetBias
-        self.exposureTargetBiasSlider.enabled = true
+        self.exposureTargetBiasSlider.enabled = (self.videoDevice != nil)
         
         self.exposureTargetOffsetSlider.minimumValue = self.videoDevice!.minExposureTargetBias
         self.exposureTargetOffsetSlider.maximumValue = self.videoDevice!.maxExposureTargetBias
@@ -549,24 +1038,23 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         // Manual white balance controls
         self.whiteBalanceModes = [.ContinuousAutoWhiteBalance, .Locked]
         
-        self.whiteBalanceModeControl.selectedSegmentIndex = find(self.whiteBalanceModes, self.videoDevice!.whiteBalanceMode)!
+        self.whiteBalanceModeControl.enabled = (self.videoDevice != nil)
+        self.whiteBalanceModeControl.selectedSegmentIndex = self.whiteBalanceModes.indexOf(self.videoDevice!.whiteBalanceMode)!
         for mode in self.whiteBalanceModes {
-            self.whiteBalanceModeControl.setEnabled(self.videoDevice!.isWhiteBalanceModeSupported(mode), forSegmentAtIndex: find(self.whiteBalanceModes, mode)!)
+            self.whiteBalanceModeControl.setEnabled(self.videoDevice!.isWhiteBalanceModeSupported(mode), forSegmentAtIndex: self.whiteBalanceModes.indexOf(mode)!)
         }
         
         self.temperatureSlider.minimumValue = 3000
         self.temperatureSlider.maximumValue = 8000
-        self.temperatureSlider.enabled = (self.videoDevice!.whiteBalanceMode == .Locked)
+        self.temperatureSlider.enabled = (self.videoDevice != nil && self.videoDevice!.whiteBalanceMode == .Locked)
         
         self.tintSlider.minimumValue = -150
         self.tintSlider.maximumValue = 150
         self.tintSlider.enabled = (self.videoDevice!.whiteBalanceMode == .Locked)
-    }
-    
-    private func positionManualHUD() {
-        // Since we only show one manual view at a time, put them all in the same place (at the top)
-        self.manualHUDExposureView.frame = CGRectMake(self.manualHUDFocusView.frame.origin.x, self.manualHUDFocusView.frame.origin.y, self.manualHUDExposureView.frame.size.width, self.manualHUDExposureView.frame.size.height)
-        self.manualHUDWhiteBalanceView.frame = CGRectMake(self.manualHUDFocusView.frame.origin.x, self.manualHUDFocusView.frame.origin.y, self.manualHUDWhiteBalanceView.frame.size.width, self.manualHUDWhiteBalanceView.frame.size.height)
+        
+        self.lensStabilizationControl.enabled = (self.videoDevice != nil)
+        self.lensStabilizationControl.selectedSegmentIndex = (self.stillImageOutput!.lensStabilizationDuringBracketedCaptureEnabled ? 1 : 0)
+        self.lensStabilizationControl.setEnabled(self.stillImageOutput!.lensStabilizationDuringBracketedCaptureSupported, forSegmentAtIndex:1)
     }
     
     private func setSlider(slider: UISlider, highlightColor color: UIColor) {
@@ -596,26 +1084,52 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
     //MARK: File Output Delegate
     
     func captureOutput(captureOutput: AVCaptureFileOutput!, didFinishRecordingToOutputFileAtURL outputFileURL: NSURL!, fromConnections connections: [AnyObject]!, error: NSError!) {
-        if error != nil {
-            NSLog("%@", error!)
-        }
-        
-        self.lockInterfaceRotation = false
-        
-        // Note the backgroundRecordingID for use in the ALAssetsLibrary completion handler to end the background task associated with this recording. This allows a new recording to be started, associated with a new UIBackgroundTaskIdentifier, once the movie file output's -isRecording is back to NO — which happens sometime after this method returns.
-        let backgroundRecordingID = self.backgroundRecordingID
+        // Note that currentBackgroundRecordingID is used to end the background task associated with this recording.
+        // This allows a new recording to be started, associated with a new UIBackgroundTaskIdentifier, once the movie file output's isRecording property
+        // is back to NO — which happens sometime after this method returns.
+        // Note: Since we use a unique file path for each recording, a new recording will not overwrite a recording currently being saved.
+        let currentBackgroundRecordingID = self.backgroundRecordingID
         self.backgroundRecordingID = UIBackgroundTaskInvalid
         
-        ALAssetsLibrary().writeVideoAtPathToSavedPhotosAlbum(outputFileURL) {assetURL, error in
-            if error != nil {
-                NSLog("%@", error!)
+        let cleanup: dispatch_block_t = {
+            do {
+                try NSFileManager.defaultManager().removeItemAtURL(outputFileURL)
+            } catch _ {}
+            if currentBackgroundRecordingID != UIBackgroundTaskInvalid {
+                UIApplication.sharedApplication().endBackgroundTask(currentBackgroundRecordingID)
             }
-            
-            NSFileManager.defaultManager().removeItemAtURL(outputFileURL, error: nil)
-            
-            if backgroundRecordingID != UIBackgroundTaskInvalid {
-                UIApplication.sharedApplication().endBackgroundTask(backgroundRecordingID)
+        }
+        
+        var success = true
+        
+        if error != nil {
+            NSLog("Movie file finishing error: %@", error!)
+            success = error!.userInfo[AVErrorRecordingSuccessfullyFinishedKey]?.boolValue ?? false
+        }
+        guard success else {
+            cleanup()
+            return
+        }
+        // Check authorization status.
+        PHPhotoLibrary.requestAuthorization {status in
+            guard status == PHAuthorizationStatus.Authorized else {
+                cleanup()
+                return
             }
+        				// Save the movie file to the photo library and cleanup.
+            PHPhotoLibrary.sharedPhotoLibrary().performChanges({
+                // In iOS 9 and later, it's possible to move the file into the photo library without duplicating the file data.
+                // This avoids using double the disk space during save, which can make a difference on devices with limited free disk space.
+                let options = PHAssetResourceCreationOptions()
+                options.shouldMoveFile = true
+                let changeRequest = PHAssetCreationRequest.creationRequestForAsset()
+                changeRequest.addResourceWithType(PHAssetResourceType.Video, fileURL: outputFileURL, options: options)
+            }, completionHandler: {success, error in
+                    if !success {
+                        NSLog("Could not save movie to photo library: %@", error!)
+                    }
+                    cleanup()
+            })
         }
     }
     
@@ -624,226 +1138,48 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
     private func focusWithMode(focusMode: AVCaptureFocusMode, exposeWithMode exposureMode: AVCaptureExposureMode, atDevicePoint point: CGPoint, monitorSubjectAreaChange: Bool) {
         dispatch_async(self.sessionQueue) {
             let device = self.videoDevice!
-            var error: NSError? = nil
-            if device.lockForConfiguration(&error) {
+            do {
+                try device.lockForConfiguration()
+                // Setting (focus/exposure)PointOfInterest alone does not initiate a (focus/exposure) operation.
+                // Call -set(Focus/Exposure)Mode: to apply the new point of interest.
                 if device.focusPointOfInterestSupported && device.isFocusModeSupported(focusMode) {
-                    device.focusMode = focusMode
                     device.focusPointOfInterest = point
+                    device.focusMode = focusMode
                 }
                 if device.exposurePointOfInterestSupported && device.isExposureModeSupported(exposureMode) {
-                    device.exposureMode = exposureMode
                     device.exposurePointOfInterest = point
+                    device.exposureMode = exposureMode
                 }
                 device.subjectAreaChangeMonitoringEnabled = monitorSubjectAreaChange
                 device.unlockForConfiguration()
-            } else {
-                NSLog("%@", error!)
-            }
+            } catch let error as NSError {
+                NSLog("Could not lock device for configuration: %@", error)
+            } catch _ {}
         }
     }
     
     class func setFlashMode(flashMode: AVCaptureFlashMode, forDevice device: AVCaptureDevice) {
         if device.hasFlash && device.isFlashModeSupported(flashMode) {
-            var error: NSError? = nil
-            if device.lockForConfiguration(&error) {
+            do {
+                try device.lockForConfiguration()
                 device.flashMode = flashMode
                 device.unlockForConfiguration()
-            } else {
-                NSLog("%@", error!)
+            } catch let error as NSError {
+                NSLog("Could not lock device for configuration: %@", error)
             }
         }
     }
     
     private func setWhiteBalanceGains(gains: AVCaptureWhiteBalanceGains) {
-        var error: NSError? = nil
         
-        if self.videoDevice!.lockForConfiguration(&error) {
+        do {
+            try self.videoDevice!.lockForConfiguration()
             let normalizedGains = self.normalizedGains(gains) // Conversion can yield out-of-bound values, cap to limits
             self.videoDevice!.setWhiteBalanceModeLockedWithDeviceWhiteBalanceGains(normalizedGains, completionHandler: nil)
             self.videoDevice!.unlockForConfiguration()
-        } else {
-            NSLog("%@", error!)
+        } catch let error as NSError {
+            NSLog("Could not lock device for configuration: %@", error)
         }
-    }
-    
-    //MARK: KVO
-    
-    private func addObservers() {
-        self.addObserver(self, forKeyPath: "sessionRunningAndDeviceAuthorized", options: .Old | .New, context: SessionRunningAndDeviceAuthorizedContext)
-        self.addObserver(self, forKeyPath: "stillImageOutput.capturingStillImage", options: .Old | .New, context: CapturingStillImageContext)
-        self.addObserver(self, forKeyPath: "movieFileOutput.recording", options: .Old | .New, context: RecordingContext)
-        
-        self.addObserver(self, forKeyPath: "videoDeviceInput.device.focusMode", options: .Initial | .Old | .New, context: FocusModeContext)
-        self.addObserver(self, forKeyPath: "videoDeviceInput.device.lensPosition", options: .Old | .New, context: LensPositionContext)
-        
-        self.addObserver(self, forKeyPath: "videoDeviceInput.device.exposureMode", options: .Initial | .Old | .New, context: ExposureModeContext)
-        self.addObserver(self, forKeyPath: "videoDeviceInput.device.exposureDuration", options: .Old | .New, context: ExposureDurationContext)
-        self.addObserver(self, forKeyPath: "videoDeviceInput.device.ISO", options: .Old | .New, context:ISOContext)
-        self.addObserver(self, forKeyPath: "videoDeviceInput.device.exposureTargetOffset", options: .Old | .New, context: ExposureTargetOffsetContext)
-        
-        self.addObserver(self, forKeyPath: "videoDeviceInput.device.whiteBalanceMode", options: .Initial | .Old | .New, context: WhiteBalanceModeContext)
-        self.addObserver(self, forKeyPath: "videoDeviceInput.device.deviceWhiteBalanceGains", options: .Old | .New, context: DeviceWhiteBalanceGainsContext)
-        
-        NSNotificationCenter.defaultCenter().addObserver(self, selector: "subjectAreaDidChange:", name:AVCaptureDeviceSubjectAreaDidChangeNotification, object: self.videoDevice!)
-        
-        self.runtimeErrorHandlingObserver = NSNotificationCenter.defaultCenter().addObserverForName(AVCaptureSessionRuntimeErrorNotification, object: self.session, queue: nil) {[weak self] note in
-            dispatch_async(self!.sessionQueue) {
-                // Manually restart the session since it must have been stopped due to an error
-                self!.session.startRunning()
-                self!.recordButton.setTitle(NSLocalizedString("Record", comment: "Recording button record title"), forState: .Normal)
-            }
-        }
-    }
-    
-    private func removeObservers() {
-        NSNotificationCenter.defaultCenter().removeObserver(self, name: AVCaptureDeviceSubjectAreaDidChangeNotification, object:self.videoDevice!)
-        NSNotificationCenter.defaultCenter().removeObserver(self.runtimeErrorHandlingObserver!)
-        
-        self.removeObserver(self, forKeyPath: "sessionRunningAndDeviceAuthorized", context:SessionRunningAndDeviceAuthorizedContext)
-        self.removeObserver(self, forKeyPath: "stillImageOutput.capturingStillImage", context: CapturingStillImageContext)
-        self.removeObserver(self, forKeyPath: "movieFileOutput.recording", context: RecordingContext)
-        
-        self.removeObserver(self, forKeyPath: "videoDevice.focusMode", context: FocusModeContext)
-        self.removeObserver(self, forKeyPath: "videoDevice.lensPosition", context: LensPositionContext)
-        
-        self.removeObserver(self, forKeyPath: "videoDevice.exposureMode", context: ExposureModeContext)
-        self.removeObserver(self, forKeyPath: "videoDevice.exposureDuration", context: ExposureDurationContext)
-        self.removeObserver(self, forKeyPath: "videoDevice.ISO", context: ISOContext)
-        self.removeObserver(self, forKeyPath: "videoDevice.exposureTargetOffset", context: ExposureTargetOffsetContext)
-        
-        self.removeObserver(self, forKeyPath: "videoDevice.whiteBalanceMode", context: WhiteBalanceModeContext)
-        self.removeObserver(self, forKeyPath: "videoDevice.deviceWhiteBalanceGains", context: DeviceWhiteBalanceGainsContext)
-    }
-    
-    override func observeValueForKeyPath(keyPath: String, ofObject object: AnyObject, change: [NSObject: AnyObject], context: UnsafeMutablePointer<Void>) {
-        switch context {
-        case FocusModeContext:
-            let oldMode = AVCaptureFocusMode(rawValue: change[NSKeyValueChangeOldKey] as! Int? ?? 0)!
-            let newMode = AVCaptureFocusMode(rawValue: change[NSKeyValueChangeNewKey] as! Int? ?? 0)!
-            NSLog("focus mode: \(stringFromFocusMode(oldMode)) -> \(stringFromFocusMode(newMode))")
-            
-            self.focusModeControl.selectedSegmentIndex = find(self.focusModes, newMode) ?? 0
-            self.lensPositionSlider.enabled = (newMode == .Locked)
-        case LensPositionContext:
-            let newLensPosition = change[NSKeyValueChangeNewKey] as! Float? ?? 0.0
-            
-            if self.videoDevice!.focusMode != .Locked {
-                self.lensPositionSlider.value = newLensPosition
-            }
-            self.lensPositionValueLabel.text = String(format: "%.1f", Double(newLensPosition))
-        case ExposureModeContext:
-            let oldMode = AVCaptureExposureMode(rawValue: change[NSKeyValueChangeOldKey] as! Int? ?? 0)!
-            let newMode = AVCaptureExposureMode(rawValue: change[NSKeyValueChangeNewKey] as! Int? ?? 0)!
-            NSLog("exposure mode: \(stringFromExposureMode(oldMode)) -> \(stringFromExposureMode(newMode))")
-            
-            self.exposureModeControl.selectedSegmentIndex = find(self.exposureModes, newMode) ?? 0
-            self.exposureDurationSlider.enabled = (newMode == .Custom)
-            self.ISOSlider.enabled = (newMode == .Custom)
-            
-            /*
-            It’s important to understand the relationship between exposureDuration and the minimum frame rate as represented by activeVideoMaxFrameDuration.
-            In manual mode, if exposureDuration is set to a value that's greater than activeVideoMaxFrameDuration, then activeVideoMaxFrameDuration will
-            increase to match it, thus lowering the minimum frame rate. If exposureMode is then changed to automatic mode, the minimum frame rate will
-            remain lower than its default. If this is not the desired behavior, the min and max frameRates can be reset to their default values for the
-            current activeFormat by setting activeVideoMaxFrameDuration and activeVideoMinFrameDuration to kCMTimeInvalid.
-            */
-            if oldMode == .Custom {
-                var error: NSError? = nil
-                if self.videoDevice!.lockForConfiguration(&error) {
-                    self.videoDevice!.activeVideoMaxFrameDuration = kCMTimeInvalid
-                    self.videoDevice!.activeVideoMinFrameDuration = kCMTimeInvalid
-                    self.videoDevice!.unlockForConfiguration()
-                }
-            }
-        case ExposureDurationContext:
-            let newDurationSeconds = CMTimeGetSeconds(change[NSKeyValueChangeNewKey]!.CMTimeValue)
-            if self.videoDevice!.exposureMode != .Custom {
-                let minDurationSeconds = max(CMTimeGetSeconds(self.videoDevice!.activeFormat.minExposureDuration), EXPOSURE_MINIMUM_DURATION)
-                let maxDurationSeconds = CMTimeGetSeconds(self.videoDevice!.activeFormat.maxExposureDuration)
-                // Map from duration to non-linear UI range 0-1
-                let p = (newDurationSeconds - minDurationSeconds) / (maxDurationSeconds - minDurationSeconds) // Scale to 0-1
-                self.exposureDurationSlider.value = Float(pow(p, 1 / EXPOSURE_DURATION_POWER)) // Apply inverse power
-                
-                if newDurationSeconds < 1 {
-                    let digits = Int32(max(0, 2 + floor(log10(newDurationSeconds))))
-                    self.exposureDurationValueLabel.text = String(format: "1/%.*f", digits, 1/Double(newDurationSeconds))
-                } else {
-                    self.exposureDurationValueLabel.text = String(format: "%.2f", Double(newDurationSeconds))
-                }
-            }
-        case ISOContext:
-            let newISO = change[NSKeyValueChangeNewKey] as! Float? ?? 0.0
-            
-            if self.videoDevice!.exposureMode != .Custom {
-                self.ISOSlider.value = newISO
-            }
-            self.ISOValueLabel.text = String(Int(newISO))
-        case ExposureTargetOffsetContext:
-            let newExposureTargetOffset = change[NSKeyValueChangeNewKey] as! Float? ?? 0.0
-            
-            self.exposureTargetOffsetSlider.value = newExposureTargetOffset
-            self.exposureTargetOffsetValueLabel.text = String(format: "%.1f", Double(newExposureTargetOffset))
-        case WhiteBalanceModeContext:
-            let oldMode = AVCaptureWhiteBalanceMode(rawValue: change[NSKeyValueChangeOldKey] as! Int? ?? 0)!
-            let newMode = AVCaptureWhiteBalanceMode(rawValue: change[NSKeyValueChangeNewKey] as! Int? ?? 0)!
-            NSLog("white balance mode: \(stringFromWhiteBalanceMode(oldMode)) -> \(stringFromWhiteBalanceMode(newMode))")
-            
-            self.whiteBalanceModeControl.selectedSegmentIndex = find(self.whiteBalanceModes, newMode) ?? 0
-            self.temperatureSlider.enabled = (newMode == .Locked)
-            self.tintSlider.enabled = (newMode == .Locked)
-        case DeviceWhiteBalanceGainsContext:
-            var newGains = AVCaptureWhiteBalanceGains()
-            (change[NSKeyValueChangeNewKey] as! NSValue).getValue(&newGains)
-            let newTemperatureAndTint = self.videoDevice!.temperatureAndTintValuesForDeviceWhiteBalanceGains(newGains)
-            
-            if self.videoDevice!.whiteBalanceMode != .Locked {
-                self.temperatureSlider.value = newTemperatureAndTint.temperature
-                self.tintSlider.value = newTemperatureAndTint.tint
-            }
-            self.temperatureValueLabel.text = String(Int(newTemperatureAndTint.temperature))
-            self.tintValueLabel.text = String(Int(newTemperatureAndTint.tint))
-        case CapturingStillImageContext:
-            let isCapturingStillImage = change[NSKeyValueChangeNewKey] as! Bool? ?? false
-            
-            if isCapturingStillImage {
-                self.runStillImageCaptureAnimation()
-            }
-        case RecordingContext:
-            let isRecording = change[NSKeyValueChangeNewKey] as! Bool? ?? false
-            
-            dispatch_async(dispatch_get_main_queue()) {
-                if isRecording {
-                    self.cameraButton.enabled = false
-                    self.recordButton.setTitle(NSLocalizedString("Stop", comment: "Recording button stop title"), forState: .Normal)
-                    self.recordButton.enabled = true
-                } else {
-                    self.cameraButton.enabled = true
-                    self.recordButton.setTitle(NSLocalizedString("Record", comment: "Recording button record title"), forState: .Normal)
-                    self.recordButton.enabled = true
-                }
-            }
-        case SessionRunningAndDeviceAuthorizedContext:
-            let isRunning = change[NSKeyValueChangeNewKey] as! Bool? ?? false
-            
-            dispatch_async(dispatch_get_main_queue()) {
-                if isRunning {
-                    self.cameraButton.enabled = true
-                    self.recordButton.enabled = true
-                    self.stillButton.enabled = true
-                } else {
-                    self.cameraButton.enabled = false
-                    self.recordButton.enabled = false
-                    self.stillButton.enabled = false
-                }
-            }
-        default:
-            super.observeValueForKeyPath(keyPath, ofObject: object, change: change, context: context)
-        }
-    }
-    
-    func subjectAreaDidChange(notificaiton: NSNotification) {
-        let devicePoint = CGPointMake(0.5, 0.5)
-        self.focusWithMode(.ContinuousAutoFocus, exposeWithMode: .ContinuousAutoExposure, atDevicePoint: devicePoint, monitorSubjectAreaChange: false)
     }
     
     //MARK: Utilities
@@ -860,25 +1196,6 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         }
         
         return captureDevice
-    }
-    
-    private func checkDeviceAuthorizationStatus() {
-        let mediaType = AVMediaTypeVideo
-        
-        AVCaptureDevice.requestAccessForMediaType(mediaType) {granted in
-            if granted {
-                self.deviceAuthorized = true
-            } else {
-                dispatch_async(dispatch_get_main_queue()) {
-                    let alert = UIAlertController(title: "AVCamManual",
-                        message: "AVCamManual doesn't have permission to use the Camera",
-                        preferredStyle: .Alert)
-                    alert.addAction(UIAlertAction(title: "OK", style: .Default, handler: nil))
-                    self.presentViewController(alert, animated: true, completion: nil)
-                    self.deviceAuthorized = false
-                }
-            }
-        }
     }
     
     private func stringFromFocusMode(focusMode: AVCaptureFocusMode) -> String {

@@ -1,15 +1,14 @@
 /*
- Copyright (C) 2014 Apple Inc. All Rights Reserved.
- See LICENSE.txt for this sample’s licensing information
- 
- Abstract:
- 
-  Camera preview.
-  
- */
+Copyright (C) 2015 Apple Inc. All Rights Reserved.
+See LICENSE.txt for this sample’s licensing information
+
+Abstract:
+Camera preview.
+*/
+
+@import AVFoundation;
 
 #import "AAPLPreviewView.h"
-#import <AVFoundation/AVFoundation.h>
 
 @implementation AAPLPreviewView
 
@@ -20,12 +19,14 @@
 
 - (AVCaptureSession *)session
 {
-	return [(AVCaptureVideoPreviewLayer *)[self layer] session];
+	AVCaptureVideoPreviewLayer *previewLayer = (AVCaptureVideoPreviewLayer *)self.layer;
+	return previewLayer.session;
 }
 
 - (void)setSession:(AVCaptureSession *)session
 {
-	[(AVCaptureVideoPreviewLayer *)[self layer] setSession:session];
+	AVCaptureVideoPreviewLayer *previewLayer = (AVCaptureVideoPreviewLayer *)self.layer;
+	previewLayer.session = session;
 }
 
 @end

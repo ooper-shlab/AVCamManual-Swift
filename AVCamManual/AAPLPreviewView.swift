@@ -6,13 +6,11 @@
 //
 //
 /*
- Copyright (C) 2014 Apple Inc. All Rights Reserved.
- See LICENSE.txt for this sample’s licensing information
+Copyright (C) 2015 Apple Inc. All Rights Reserved.
+See LICENSE.txt for this sample’s licensing information
 
- Abstract:
-
-  Camera preview.
-
+Abstract:
+Camera preview.
 */
 
 import UIKit
@@ -27,11 +25,13 @@ class AAPLPreviewView: UIView {
     
     var session: AVCaptureSession? {
         get {
-            return (self.layer as! AVCaptureVideoPreviewLayer).session
+            let previewLayer = self.layer as! AVCaptureVideoPreviewLayer
+            return previewLayer.session
         }
         
         set {
-            (self.layer as! AVCaptureVideoPreviewLayer).session = newValue
+            let previewLayer = self.layer as! AVCaptureVideoPreviewLayer
+            previewLayer.session = newValue
         }
     }
     
