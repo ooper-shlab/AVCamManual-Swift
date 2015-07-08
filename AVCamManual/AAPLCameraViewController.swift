@@ -367,7 +367,7 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         self.removeObserver(self, forKeyPath: "stillImageOutput.lensStabilizationDuringBracketedCaptureEnabled", context: &LensStabilizationContext)
     }
     
-    override func observeValueForKeyPath(keyPath: String?, ofObject object: AnyObject?, change: [NSObject : AnyObject]?, context: UnsafeMutablePointer<Void>) {
+    override func observeValueForKeyPath(keyPath: String?, ofObject object: AnyObject?, change: [String : AnyObject]?, context: UnsafeMutablePointer<Void>) {
         let oldValue: AnyObject? = change![NSKeyValueChangeOldKey]
         let newValue: AnyObject? = change![NSKeyValueChangeNewKey]
         
@@ -620,7 +620,7 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
     
     //MARK: Actions
     
-    @IBAction func resumeInterruptedSession(AnyObject) {
+    @IBAction func resumeInterruptedSession(_: AnyObject) {
         dispatch_async(self.sessionQueue) {
             // The session might fail to start running, e.g., if a phone or FaceTime call is still using audio or video.
             // A failure to start the session running will be communicated via a session runtime error notification.
@@ -644,7 +644,7 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         }
     }
     
-    @IBAction func toggleMovieRecording(AnyObject) {
+    @IBAction func toggleMovieRecording(_: AnyObject) {
         self.recordButton.enabled = false
         
         dispatch_async(self.sessionQueue) {
@@ -676,7 +676,7 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         }
     }
     
-    @IBAction func changeCamera(AnyObject) {
+    @IBAction func changeCamera(_: AnyObject) {
         self.cameraButton.enabled = false
         self.recordButton.enabled = false
         self.stillButton.enabled = false
@@ -734,7 +734,7 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         }
     }
     
-    @IBAction func snapStillImage(AnyObject) {
+    @IBAction func snapStillImage(_: AnyObject) {
         dispatch_async(self.sessionQueue) {
             let stillImageConnection = self.stillImageOutput!.connectionWithMediaType(AVMediaTypeVideo)
             let previewLayer = self.previewView.layer as! AVCaptureVideoPreviewLayer
@@ -787,7 +787,7 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
                         if error != nil {
                             NSLog("Error bracketing capture still image %@", error!)
                         } else if imageDataSampleBuffer != nil {
-                            NSLog("Lens Stabilization State: \(CMGetAttachment(imageDataSampleBuffer, kCMSampleBufferAttachmentKey_StillImageLensStabilizationInfo, nil)!.takeUnretainedValue())")
+                            NSLog("Lens Stabilization State: \(CMGetAttachment(imageDataSampleBuffer, kCMSampleBufferAttachmentKey_StillImageLensStabilizationInfo, nil)!)")
                             let imageData = AVCaptureStillImageOutput.jpegStillImageNSDataRepresentation(imageDataSampleBuffer)
                             
                             PHPhotoLibrary.requestAuthorization {status in
@@ -930,7 +930,7 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         }
     }
     
-    @IBAction func changeTemperature(AnyObject) {
+    @IBAction func changeTemperature(_: AnyObject) {
         let temperatureAndTint = AVCaptureWhiteBalanceTemperatureAndTintValues(
             temperature: self.temperatureSlider.value,
             tint: self.tintSlider.value
@@ -939,7 +939,7 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         self.setWhiteBalanceGains(self.videoDevice!.deviceWhiteBalanceGainsForTemperatureAndTintValues(temperatureAndTint))
     }
     
-    @IBAction func changeTint(AnyObject) {
+    @IBAction func changeTint(_: AnyObject) {
         let temperatureAndTint = AVCaptureWhiteBalanceTemperatureAndTintValues(
             temperature: self.temperatureSlider.value,
             tint: self.tintSlider.value
@@ -948,7 +948,7 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         self.setWhiteBalanceGains(self.videoDevice!.deviceWhiteBalanceGainsForTemperatureAndTintValues(temperatureAndTint))
     }
     
-    @IBAction func lockWithGrayWorld(AnyObject) {
+    @IBAction func lockWithGrayWorld(_: AnyObject) {
         self.setWhiteBalanceGains(self.videoDevice!.grayWorldDeviceWhiteBalanceGains)
     }
     

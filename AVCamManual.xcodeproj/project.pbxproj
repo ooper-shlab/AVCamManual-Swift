@@ -18,15 +18,8 @@
 /* Begin PBXFileReference section */
 		2F360BA217692C4700D9A404 /* AVCamManual.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AVCamManual.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2F360BAD17692C4700D9A404 /* AVCamManual-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; name = "AVCamManual-Info.plist"; path = "AVCamManual/AVCamManual-Info.plist"; sourceTree = "<group>"; };
-		2F360BB117692C4700D9A404 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = main.m; path = AVCamManual/main.m; sourceTree = "<group>"; };
-		2F360BB417692C4700D9A404 /* AAPLAppDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = AAPLAppDelegate.h; path = AVCamManual/AAPLAppDelegate.h; sourceTree = "<group>"; };
-		2F360BB517692C4700D9A404 /* AAPLAppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = AAPLAppDelegate.m; path = AVCamManual/AAPLAppDelegate.m; sourceTree = "<group>"; };
 		2F360BB817692C4700D9A404 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
-		2F360BBD17692C4700D9A404 /* AAPLCameraViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = AAPLCameraViewController.h; path = AVCamManual/AAPLCameraViewController.h; sourceTree = "<group>"; };
-		2F360BBE17692C4700D9A404 /* AAPLCameraViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = AAPLCameraViewController.m; path = AVCamManual/AAPLCameraViewController.m; sourceTree = "<group>"; };
 		2F360BC017692C4700D9A404 /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = AVCamManual/Images.xcassets; sourceTree = "<group>"; };
-		2FDA781B176DB79700509279 /* AAPLPreviewView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = AAPLPreviewView.h; path = AVCamManual/AAPLPreviewView.h; sourceTree = "<group>"; };
-		2FDA781C176DB79700509279 /* AAPLPreviewView.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = AAPLPreviewView.m; path = AVCamManual/AAPLPreviewView.m; sourceTree = "<group>"; };
 		6F580E4B1B0A649C00B81B97 /* README.md */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		6F580E4E1B0A64E800B81B97 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = "AVCamManual/Base.lproj/Launch Screen.storyboard"; sourceTree = "<group>"; };
 		D7245A4C1B3B75CB00A9B7D1 /* AAPLAppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = AAPLAppDelegate.swift; path = AVCamManual/AAPLAppDelegate.swift; sourceTree = "<group>"; };
@@ -59,14 +52,8 @@
 		2F360BAB17692C4700D9A404 /* AVCamManual */ = {
 			isa = PBXGroup;
 			children = (
-				2F360BB417692C4700D9A404 /* AAPLAppDelegate.h */,
-				2F360BB517692C4700D9A404 /* AAPLAppDelegate.m */,
 				D7245A4C1B3B75CB00A9B7D1 /* AAPLAppDelegate.swift */,
-				2F360BBD17692C4700D9A404 /* AAPLCameraViewController.h */,
-				2F360BBE17692C4700D9A404 /* AAPLCameraViewController.m */,
 				D7245A541B3B793200A9B7D1 /* AAPLCameraViewController.swift */,
-				2FDA781B176DB79700509279 /* AAPLPreviewView.h */,
-				2FDA781C176DB79700509279 /* AAPLPreviewView.m */,
 				D7245A4E1B3B775900A9B7D1 /* AAPLPreviewView.swift */,
 				6F580E4D1B0A64E800B81B97 /* Launch Screen.storyboard */,
 				2F360BB717692C4700D9A404 /* Main.storyboard */,
@@ -80,7 +67,6 @@
 			isa = PBXGroup;
 			children = (
 				2F360BAD17692C4700D9A404 /* AVCamManual-Info.plist */,
-				2F360BB117692C4700D9A404 /* main.m */,
 			);
 			name = "Supporting Files";
 			sourceTree = "<group>";
