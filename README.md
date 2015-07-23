@@ -6,9 +6,9 @@ AVCamManual adds manual controls for focus, exposure, and white balance to the A
 #### New for iOS 9
 iPhone 6 Plus shipped with a lens stabilization module that is used during still image capture to reduce the effects of hand-shake in low-light situations.  
 
-AVFoundation introduces an API to apply lens stabilization to still images captured via the bracketed capture APIs from iOS 8.
+AVFoundation introduces an API to apply lens stabilization to still images captured via the bracketed capture APIs from iOS 8--this sample demonstrates the use of this API.
 
-AVCamManual has been updated to demonstrate the use of this API.
+AVCamManual also uses size classes to work across all available sceen sizes.
 
 #### Using the Lens Stabilization API
 To turn lens stabilization on during a bracketed still image capture sequence, first check if it's supported by querying the read-only property `AVCaptureStillImageOutput.lensStabilizationDuringBracketedCaptureSupported`.  If it's supported, your code can then set `AVCaptureStillImageOutput.lensStabilizationDuringBracketedCaptureEnabled` to `YES`.

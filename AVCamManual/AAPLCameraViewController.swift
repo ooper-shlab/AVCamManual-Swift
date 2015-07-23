@@ -18,7 +18,6 @@ import AVFoundation
 import Photos
 
 private var CapturingStillImageContext = 0
-private var RecordingContext = 0
 private var SessionRunningContext = 0
 
 private var FocusModeContext = 0
@@ -102,6 +101,11 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
     override func viewDidLoad() {
         super.viewDidLoad()
         
+        // Disable UI. The UI is enabled if and only if the session starts running.
+        self.cameraButton.enabled = false
+        self.recordButton.enabled = false
+        self.stillButton.enabled = false
+
         self.manualHUDFocusView.hidden = true
         self.manualHUDExposureView.hidden = true
         self.manualHUDWhiteBalanceView.hidden = true
@@ -324,7 +328,6 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
     private func addObservers() {
         self.addObserver(self, forKeyPath: "session.running", options: .New, context: &SessionRunningContext)
         self.addObserver(self, forKeyPath: "stillImageOutput.capturingStillImage", options: .New, context: &CapturingStillImageContext)
-        self.addObserver(self, forKeyPath: "movieFileOutput.recording", options: .New, context: &RecordingContext)
         
         self.addObserver(self, forKeyPath: "videoDevice.focusMode", options: [.Old, .New], context: &FocusModeContext)
         self.addObserver(self, forKeyPath: "videoDevice.lensPosition", options: .New, context: &LensPositionContext)
@@ -352,7 +355,6 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         
         self.removeObserver(self, forKeyPath: "session.running", context: &SessionRunningContext)
         self.removeObserver(self, forKeyPath: "stillImageOutput.capturingStillImage", context: &CapturingStillImageContext)
-        self.removeObserver(self, forKeyPath: "movieFileOutput.recording", context: &RecordingContext)
         
         self.removeObserver(self, forKeyPath: "videoDevice.focusMode", context: &FocusModeContext)
         self.removeObserver(self, forKeyPath: "videoDevice.lensPosition", context: &LensPositionContext)
@@ -500,24 +502,6 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
                     }
                 }
             }
-        case &RecordingContext:
-            var isRecording = false
-            if let value = newValue where value !== NSNull() {
-                isRecording = value as! Bool
-            }
-            
-            dispatch_async(dispatch_get_main_queue()) {
-                if isRecording {
-                    self.cameraButton.enabled = false
-                    self.recordButton.enabled = true
-                    self.recordButton.setTitle(NSLocalizedString("Stop", comment: "Recording button stop title"), forState: .Normal)
-                } else {
-                    // Only enable the ability to change camera if the device has more than one camera.
-                    self.cameraButton.enabled = (AVCaptureDevice.devicesWithMediaType(AVMediaTypeVideo).count > 1)
-                    self.recordButton.enabled = true
-                    self.recordButton.setTitle(NSLocalizedString("Record", comment: "Recording button record title"), forState: .Normal)
-                }
-            }
         case &SessionRunningContext:
             var isRunning = false
             if let value = newValue where value !== NSNull() {
@@ -645,6 +629,9 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
     }
     
     @IBAction func toggleMovieRecording(_: AnyObject) {
+        // Disable the Camera button until recording finishes, and disable the Record button until recording starts or finishes. See the
+        // AVCaptureFileOutputRecordingDelegate methods.
+        self.cameraButton.enabled = false
         self.recordButton.enabled = false
         
         dispatch_async(self.sessionQueue) {
@@ -1081,7 +1068,15 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         }
     }
     
-    //MARK: File Output Delegate
+    //MARK: File Output Recording Delegate
+
+    func captureOutput(captureOutput: AVCaptureFileOutput!, didStartRecordingToOutputFileAtURL fileURL: NSURL!, fromConnections connections: [AnyObject]!) {
+        // Enable the Record button to let the user stop the recording.
+        dispatch_async( dispatch_get_main_queue()) {
+            self.recordButton.enabled = true
+            self.recordButton.setTitle(NSLocalizedString("Stop", comment: "Recording button stop title"), forState: .Normal)
+        }
+    }
     
     func captureOutput(captureOutput: AVCaptureFileOutput!, didFinishRecordingToOutputFileAtURL outputFileURL: NSURL!, fromConnections connections: [AnyObject]!, error: NSError!) {
         // Note that currentBackgroundRecordingID is used to end the background task associated with this recording.
@@ -1106,30 +1101,38 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
             NSLog("Movie file finishing error: %@", error!)
             success = error!.userInfo[AVErrorRecordingSuccessfullyFinishedKey]?.boolValue ?? false
         }
-        guard success else {
-            cleanup()
-            return
-        }
-        // Check authorization status.
-        PHPhotoLibrary.requestAuthorization {status in
-            guard status == PHAuthorizationStatus.Authorized else {
-                cleanup()
-                return
-            }
-        				// Save the movie file to the photo library and cleanup.
-            PHPhotoLibrary.sharedPhotoLibrary().performChanges({
-                // In iOS 9 and later, it's possible to move the file into the photo library without duplicating the file data.
-                // This avoids using double the disk space during save, which can make a difference on devices with limited free disk space.
-                let options = PHAssetResourceCreationOptions()
-                options.shouldMoveFile = true
-                let changeRequest = PHAssetCreationRequest.creationRequestForAsset()
-                changeRequest.addResourceWithType(PHAssetResourceType.Video, fileURL: outputFileURL, options: options)
-            }, completionHandler: {success, error in
-                    if !success {
-                        NSLog("Could not save movie to photo library: %@", error!)
-                    }
+        if success {
+            // Check authorization status.
+            PHPhotoLibrary.requestAuthorization {status in
+                guard status == PHAuthorizationStatus.Authorized else {
                     cleanup()
-            })
+                    return
+                }
+                // Save the movie file to the photo library and cleanup.
+                PHPhotoLibrary.sharedPhotoLibrary().performChanges({
+                    // In iOS 9 and later, it's possible to move the file into the photo library without duplicating the file data.
+                    // This avoids using double the disk space during save, which can make a difference on devices with limited free disk space.
+                    let options = PHAssetResourceCreationOptions()
+                    options.shouldMoveFile = true
+                    let changeRequest = PHAssetCreationRequest.creationRequestForAsset()
+                    changeRequest.addResourceWithType(PHAssetResourceType.Video, fileURL: outputFileURL, options: options)
+                    }, completionHandler: {success, error in
+                        if !success {
+                            NSLog("Could not save movie to photo library: %@", error!)
+                        }
+                        cleanup()
+                })
+            }
+        } else {
+            cleanup()
+        }
+        
+        // Enable the Camera and Record buttons to let the user switch camera and start another recording.
+        dispatch_async( dispatch_get_main_queue()) {
+            // Only enable the ability to change camera if the device has more than one camera.
+            self.cameraButton.enabled = (AVCaptureDevice.devicesWithMediaType(AVMediaTypeVideo).count > 1)
+            self.recordButton.enabled = true
+            self.recordButton.setTitle(NSLocalizedString("Record", comment: "Recording button record title"), forState: .Normal)
         }
     }
     

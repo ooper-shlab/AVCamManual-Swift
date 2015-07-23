@@ -13,7 +13,6 @@ View controller for camera interface.
 #import "AAPLPreviewView.h"
 
 static void * CapturingStillImageContext = &CapturingStillImageContext;
-static void * RecordingContext = &RecordingContext;
 static void * SessionRunningContext = &SessionRunningContext;
 
 static void * FocusModeContext = &FocusModeContext;
@@ -100,6 +99,11 @@ static const float kExposureMinimumDuration = 1.0/1000; // Limit exposure durati
 - (void)viewDidLoad
 {
 	[super viewDidLoad];
+
+	// Disable UI. The UI is enabled if and only if the session starts running.
+	self.cameraButton.enabled = NO;
+	self.recordButton.enabled = NO;
+	self.stillButton.enabled = NO;
 
 	self.manualHUDFocusView.hidden = YES;
 	self.manualHUDExposureView.hidden = YES;
@@ -342,7 +346,6 @@ static const float kExposureMinimumDuration = 1.0/1000; // Limit exposure durati
 {
 	[self addObserver:self forKeyPath:@"session.running" options:NSKeyValueObservingOptionNew context:SessionRunningContext];
 	[self addObserver:self forKeyPath:@"stillImageOutput.capturingStillImage" options:NSKeyValueObservingOptionNew context:CapturingStillImageContext];
-	[self addObserver:self forKeyPath:@"movieFileOutput.recording" options:NSKeyValueObservingOptionNew context:RecordingContext];
 
 	[self addObserver:self forKeyPath:@"videoDevice.focusMode" options:(NSKeyValueObservingOptionOld | NSKeyValueObservingOptionNew) context:FocusModeContext];
 	[self addObserver:self forKeyPath:@"videoDevice.lensPosition" options:NSKeyValueObservingOptionNew context:LensPositionContext];
@@ -371,7 +374,6 @@ static const float kExposureMinimumDuration = 1.0/1000; // Limit exposure durati
 
 	[self removeObserver:self forKeyPath:@"session.running" context:SessionRunningContext];
 	[self removeObserver:self forKeyPath:@"stillImageOutput.capturingStillImage" context:CapturingStillImageContext];
-	[self removeObserver:self forKeyPath:@"movieFileOutput.recording" context:RecordingContext];
 
 	[self removeObserver:self forKeyPath:@"videoDevice.focusMode" context:FocusModeContext];
 	[self removeObserver:self forKeyPath:@"videoDevice.lensPosition" context:LensPositionContext];
@@ -527,26 +529,6 @@ static const float kExposureMinimumDuration = 1.0/1000; // Limit exposure durati
 			} );
 		}
 	}
-	else if ( context == RecordingContext ) {
-		BOOL isRecording = NO;
-		if ( newValue && newValue != [NSNull null] ) {
-			isRecording = [newValue boolValue];
-		}
-
-		dispatch_async( dispatch_get_main_queue(), ^{
-			if ( isRecording ) {
-				self.cameraButton.enabled = NO;
-				self.recordButton.enabled = YES;
-				[self.recordButton setTitle:NSLocalizedString( @"Stop", @"Recording button stop title" ) forState:UIControlStateNormal];
-			}
-			else {
-				// Only enable the ability to change camera if the device has more than one camera.
-				self.cameraButton.enabled = ( [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo].count > 1 );
-				self.recordButton.enabled = YES;
-				[self.recordButton setTitle:NSLocalizedString( @"Record", @"Recording button record title" ) forState:UIControlStateNormal];
-			}
-		} );
-	}
 	else if ( context == SessionRunningContext ) {
 		BOOL isRunning = NO;
 		if ( newValue && newValue != [NSNull null] ) {
@@ -685,6 +667,9 @@ static const float kExposureMinimumDuration = 1.0/1000; // Limit exposure durati
 
 - (IBAction)toggleMovieRecording:(id)sender
 {
+	// Disable the Camera button until recording finishes, and disable the Record button until recording starts or finishes. See the
+	// AVCaptureFileOutputRecordingDelegate methods.
+	self.cameraButton.enabled = NO;
 	self.recordButton.enabled = NO;
 
 	dispatch_async( self.sessionQueue, ^{
@@ -1164,7 +1149,16 @@ static const float kExposureMinimumDuration = 1.0/1000; // Limit exposure durati
 	}
 }
 
-#pragma mark File Output Delegate
+#pragma mark File Output Recording Delegate
+
+- (void)captureOutput:(AVCaptureFileOutput *)captureOutput didStartRecordingToOutputFileAtURL:(NSURL *)fileURL fromConnections:(NSArray *)connections
+{
+	// Enable the Record button to let the user stop the recording.
+	dispatch_async( dispatch_get_main_queue(), ^{
+		self.recordButton.enabled = YES;
+		[self.recordButton setTitle:NSLocalizedString( @"Stop", @"Recording button stop title") forState:UIControlStateNormal];
+	});
+}
 
 - (void)captureOutput:(AVCaptureFileOutput *)captureOutput didFinishRecordingToOutputFileAtURL:(NSURL *)outputFileURL fromConnections:(NSArray *)connections error:(NSError *)error
 {
@@ -1215,6 +1209,14 @@ static const float kExposureMinimumDuration = 1.0/1000; // Limit exposure durati
 	else {
 		cleanup();
 	}
+
+	// Enable the Camera and Record buttons to let the user switch camera and start another recording.
+	dispatch_async( dispatch_get_main_queue(), ^{
+		// Only enable the ability to change camera if the device has more than one camera.
+		self.cameraButton.enabled = ( [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo].count > 1 );
+		self.recordButton.enabled = YES;
+		[self.recordButton setTitle:NSLocalizedString( @"Record", @"Recording button record title") forState:UIControlStateNormal];
+	});
 }
 
 #pragma mark Device Configuration
