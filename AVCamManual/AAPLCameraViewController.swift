@@ -45,6 +45,7 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
     @IBOutlet weak var recordButton: UIButton!
     @IBOutlet weak var cameraButton: UIButton!
     @IBOutlet weak var stillButton: UIButton!
+    @IBOutlet weak var manualSegments: UISegmentedControl!
     
     private var focusModes: [AVCaptureFocusMode] = []
     @IBOutlet weak var manualHUDFocusView: UIView!
@@ -86,7 +87,7 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
     private var sessionQueue: dispatch_queue_t!
     dynamic var session: AVCaptureSession!
     dynamic var videoDeviceInput: AVCaptureDeviceInput?
-    private var videoDevice: AVCaptureDevice?
+    dynamic var videoDevice: AVCaptureDevice?
     dynamic var movieFileOutput: AVCaptureMovieFileOutput?
     dynamic var stillImageOutput: AVCaptureStillImageOutput?
     
@@ -222,8 +223,8 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
             let movieFileOutput = AVCaptureMovieFileOutput()
             if self.session.canAddOutput(movieFileOutput) {
                 self.session.addOutput(movieFileOutput)
-                let connection = movieFileOutput.connectionWithMediaType(AVMediaTypeVideo)
-                if connection.supportsVideoStabilization {
+                if let connection = movieFileOutput.connectionWithMediaType(AVMediaTypeVideo)
+                where connection.supportsVideoStabilization {
                     connection.preferredVideoStabilizationMode = AVCaptureVideoStabilizationMode.Auto
                 }
                 self.movieFileOutput = movieFileOutput
@@ -736,7 +737,13 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
                 AAPLCameraViewController.setFlashMode(.Auto, forDevice: self.videoDevice!)
             }
             
-            if !self.stillImageOutput!.lensStabilizationDuringBracketedCaptureEnabled {
+            let lensStabilizationEnabled: Bool
+            if #available(iOS 9.0, *) {
+                lensStabilizationEnabled = self.stillImageOutput!.lensStabilizationDuringBracketedCaptureEnabled
+            } else {
+                lensStabilizationEnabled = false
+            }
+            if !lensStabilizationEnabled {
                 // Capture a still image
                 self.stillImageOutput?.captureStillImageAsynchronouslyFromConnection(self.stillImageOutput!.connectionWithMediaType(AVMediaTypeVideo)) {imageDataSampleBuffer, error in
                     
@@ -747,18 +754,45 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
                         
                         PHPhotoLibrary.requestAuthorization {status in
                             if status == PHAuthorizationStatus.Authorized {
-                                PHPhotoLibrary.sharedPhotoLibrary().performChanges({
-                                    PHAssetCreationRequest.creationRequestForAsset().addResourceWithType(PHAssetResourceType.Photo, data: imageData, options: nil)
-                                }, completionHandler: {success, error in
-                                        if !success {
-                                            NSLog("Error occured while saving image to photo library: %@", error!)
+                                if #available(iOS 9.0, *) {
+                                    PHPhotoLibrary.sharedPhotoLibrary().performChanges({
+                                        PHAssetCreationRequest.creationRequestForAsset().addResourceWithType(PHAssetResourceType.Photo, data: imageData, options: nil)
+                                        }, completionHandler: {success, error in
+                                            if !success {
+                                                NSLog("Error occured while saving image to photo library: %@", error!)
+                                            }
+                                    })
+                                } else {
+                                    let temporaryFileName = NSProcessInfo().globallyUniqueString
+                                    let temporaryFilePath = NSTemporaryDirectory().stringByAppendingPathComponent(temporaryFileName.stringByAppendingPathExtension("jpg")!)
+                                    let temporaryFileURL = NSURL(fileURLWithPath: temporaryFilePath)
+                                    
+                                    PHPhotoLibrary.sharedPhotoLibrary().performChanges({
+                                        do {
+                                            try imageData.writeToURL(temporaryFileURL, options: .AtomicWrite)
+                                            PHAssetChangeRequest.creationRequestForAssetFromImageAtFileURL(temporaryFileURL)
+                                        } catch let error as NSError {
+                                            NSLog("Error occured while writing image data to a temporary file: %@", error)
+                                        } catch _ {
+                                            fatalError()
                                         }
-                                })
+                                        }, completionHandler: {success, error in
+                                            if !success {
+                                                NSLog("Error occurred while saving image to photo library: %@", error!)
+                                            }
+                                            
+                                            // Delete the temporary file.
+                                            do {
+                                                try NSFileManager.defaultManager().removeItemAtURL(temporaryFileURL)
+                                            } catch _ {}
+                                    })
+                                }
                             }
                         }
                     }
                 }
             } else {
+                if #available(iOS 9.0, *) {
                 // Capture a bracket
                 let bracketSettings: [AVCaptureBracketedStillImageSettings]
                 if self.videoDevice!.exposureMode == AVCaptureExposureMode.Custom {
@@ -790,6 +824,7 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
                             }
                         }
                 }
+                }
             }
         }
     }
@@ -806,7 +841,11 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         self.manualHUDFocusView.hidden = (control.selectedSegmentIndex != 1)
         self.manualHUDExposureView.hidden = (control.selectedSegmentIndex != 2)
         self.manualHUDWhiteBalanceView.hidden = (control.selectedSegmentIndex != 3)
-        self.manualHUDLensStabilizationView.hidden = (control.selectedSegmentIndex != 4)
+        if #available(iOS 9.0, *) {
+            self.manualHUDLensStabilizationView.hidden = (control.selectedSegmentIndex != 4)
+        } else {
+            self.manualHUDLensStabilizationView.hidden = true
+        }
     }
     
     @IBAction func changeFocusMode(control: UISegmentedControl) {
@@ -939,6 +978,7 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         self.setWhiteBalanceGains(self.videoDevice!.grayWorldDeviceWhiteBalanceGains)
     }
     
+    @available(iOS 9.0, *)
     @IBAction func changeLensStabilization(control: UISegmentedControl) {
         let lensStabilizationDuringBracketedCaptureEnabled = (control.selectedSegmentIndex != 0)
         if lensStabilizationDuringBracketedCaptureEnabled {
@@ -987,9 +1027,11 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         self.focusModes = [.ContinuousAutoFocus, .Locked]
         
         self.focusModeControl.enabled = (self.videoDevice != nil)
-        self.focusModeControl.selectedSegmentIndex = self.focusModes.indexOf(self.videoDevice!.focusMode)!
-        for mode in self.focusModes {
-            self.focusModeControl.setEnabled(self.videoDevice!.isFocusModeSupported(mode), forSegmentAtIndex: self.focusModes.indexOf(mode)!)
+        if self.videoDevice != nil {
+            self.focusModeControl.selectedSegmentIndex = self.focusModes.indexOf(self.videoDevice!.focusMode)!
+            for mode in self.focusModes {
+                self.focusModeControl.setEnabled(self.videoDevice!.isFocusModeSupported(mode), forSegmentAtIndex: self.focusModes.indexOf(mode)!)
+            }
         }
         
         self.lensPositionSlider.minimumValue = 0.0
@@ -1000,35 +1042,45 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         self.exposureModes = [.ContinuousAutoExposure, .Locked, .Custom]
         
         self.exposureModeControl.enabled = (self.videoDevice != nil)
-        self.exposureModeControl.selectedSegmentIndex = self.exposureModes.indexOf(self.videoDevice!.exposureMode)!
-        for mode in self.exposureModes {
-            self.exposureModeControl.setEnabled(self.videoDevice!.isExposureModeSupported(mode), forSegmentAtIndex: self.exposureModes.indexOf(mode)!)
+        if self.videoDevice != nil {
+            self.exposureModeControl.selectedSegmentIndex = self.exposureModes.indexOf(self.videoDevice!.exposureMode)!
+            for mode in self.exposureModes {
+                self.exposureModeControl.setEnabled(self.videoDevice!.isExposureModeSupported(mode), forSegmentAtIndex: self.exposureModes.indexOf(mode)!)
+            }
         }
         
         // Use 0-1 as the slider range and do a non-linear mapping from the slider value to the actual device exposure duration
         self.exposureDurationSlider.minimumValue = 0
         self.exposureDurationSlider.maximumValue = 1
         self.exposureDurationSlider.enabled = (self.videoDevice != nil && self.videoDevice!.exposureMode == .Custom)
-        
-        self.ISOSlider.minimumValue = self.videoDevice!.activeFormat.minISO
-        self.ISOSlider.maximumValue = self.videoDevice!.activeFormat.maxISO
-        self.ISOSlider.enabled = (self.videoDevice!.exposureMode == AVCaptureExposureMode.Custom)
-        
-        self.exposureTargetBiasSlider.minimumValue = self.videoDevice!.minExposureTargetBias
-        self.exposureTargetBiasSlider.maximumValue = self.videoDevice!.maxExposureTargetBias
+
+        if self.videoDevice != nil {
+            self.ISOSlider.minimumValue = self.videoDevice!.activeFormat.minISO
+            self.ISOSlider.maximumValue = self.videoDevice!.activeFormat.maxISO
+        }
+        self.ISOSlider.enabled = (self.videoDevice?.exposureMode == AVCaptureExposureMode.Custom)
+
+        if self.videoDevice != nil {
+            self.exposureTargetBiasSlider.minimumValue = self.videoDevice!.minExposureTargetBias
+            self.exposureTargetBiasSlider.maximumValue = self.videoDevice!.maxExposureTargetBias
+        }
         self.exposureTargetBiasSlider.enabled = (self.videoDevice != nil)
         
-        self.exposureTargetOffsetSlider.minimumValue = self.videoDevice!.minExposureTargetBias
-        self.exposureTargetOffsetSlider.maximumValue = self.videoDevice!.maxExposureTargetBias
+        if self.videoDevice != nil {
+            self.exposureTargetOffsetSlider.minimumValue = self.videoDevice!.minExposureTargetBias
+            self.exposureTargetOffsetSlider.maximumValue = self.videoDevice!.maxExposureTargetBias
+        }
         self.exposureTargetOffsetSlider.enabled = false
         
         // Manual white balance controls
         self.whiteBalanceModes = [.ContinuousAutoWhiteBalance, .Locked]
         
         self.whiteBalanceModeControl.enabled = (self.videoDevice != nil)
-        self.whiteBalanceModeControl.selectedSegmentIndex = self.whiteBalanceModes.indexOf(self.videoDevice!.whiteBalanceMode)!
-        for mode in self.whiteBalanceModes {
-            self.whiteBalanceModeControl.setEnabled(self.videoDevice!.isWhiteBalanceModeSupported(mode), forSegmentAtIndex: self.whiteBalanceModes.indexOf(mode)!)
+        if self.videoDevice != nil {
+            self.whiteBalanceModeControl.selectedSegmentIndex = self.whiteBalanceModes.indexOf(self.videoDevice!.whiteBalanceMode)!
+            for mode in self.whiteBalanceModes {
+                self.whiteBalanceModeControl.setEnabled(self.videoDevice!.isWhiteBalanceModeSupported(mode), forSegmentAtIndex: self.whiteBalanceModes.indexOf(mode)!)
+            }
         }
         
         self.temperatureSlider.minimumValue = 3000
@@ -1037,11 +1089,16 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
         
         self.tintSlider.minimumValue = -150
         self.tintSlider.maximumValue = 150
-        self.tintSlider.enabled = (self.videoDevice!.whiteBalanceMode == .Locked)
+        self.tintSlider.enabled = (self.videoDevice?.whiteBalanceMode == .Locked)
         
-        self.lensStabilizationControl.enabled = (self.videoDevice != nil)
-        self.lensStabilizationControl.selectedSegmentIndex = (self.stillImageOutput!.lensStabilizationDuringBracketedCaptureEnabled ? 1 : 0)
-        self.lensStabilizationControl.setEnabled(self.stillImageOutput!.lensStabilizationDuringBracketedCaptureSupported, forSegmentAtIndex:1)
+        if #available(iOS 9.0, *) {
+            self.lensStabilizationControl.enabled = (self.videoDevice != nil)
+            self.lensStabilizationControl.selectedSegmentIndex = (self.stillImageOutput!.lensStabilizationDuringBracketedCaptureEnabled ? 1 : 0)
+            self.lensStabilizationControl.setEnabled(self.stillImageOutput!.lensStabilizationDuringBracketedCaptureSupported, forSegmentAtIndex:1)
+        } else {
+            self.manualSegments.setEnabled(false, forSegmentAtIndex: 4)
+            self.lensStabilizationControl.hidden = true
+        }
     }
     
     private func setSlider(slider: UISlider, highlightColor color: UIColor) {
@@ -1112,10 +1169,14 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
                 PHPhotoLibrary.sharedPhotoLibrary().performChanges({
                     // In iOS 9 and later, it's possible to move the file into the photo library without duplicating the file data.
                     // This avoids using double the disk space during save, which can make a difference on devices with limited free disk space.
-                    let options = PHAssetResourceCreationOptions()
-                    options.shouldMoveFile = true
-                    let changeRequest = PHAssetCreationRequest.creationRequestForAsset()
-                    changeRequest.addResourceWithType(PHAssetResourceType.Video, fileURL: outputFileURL, options: options)
+                    if #available(iOS 9.0, *) {
+                        let options = PHAssetResourceCreationOptions()
+                        options.shouldMoveFile = true
+                        let changeRequest = PHAssetCreationRequest.creationRequestForAsset()
+                        changeRequest.addResourceWithType(PHAssetResourceType.Video, fileURL: outputFileURL, options: options)
+                    } else {
+                        PHAssetChangeRequest.creationRequestForAssetFromVideoAtFileURL(outputFileURL)
+                    }
                     }, completionHandler: {success, error in
                         if !success {
                             NSLog("Could not save movie to photo library: %@", error!)

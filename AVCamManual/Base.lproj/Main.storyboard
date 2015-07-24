@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="8121.20" systemVersion="14F3" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" useTraitCollections="YES" initialViewController="zFy-Vn-e8f">
+<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="8164.2" systemVersion="14D136" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" useTraitCollections="YES" initialViewController="zFy-Vn-e8f">
     <dependencies>
-        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="8101.16"/>
+        <deployment identifier="iOS"/>
+        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="8135.1"/>
         <capability name="Constraints to layout margins" minToolsVersion="6.0"/>
     </dependencies>
     <scenes>
@@ -394,7 +395,7 @@
                                                 <nil key="highlightedColor"/>
                                             </label>
                                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Tint" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="iZS-VT-Co6">
-                                                <rect key="frame" x="8" y="92" width="26" height="17"/>
+                                                <rect key="frame" x="8" y="92" width="25" height="17"/>
                                                 <fontDescription key="fontDescription" type="system" pointSize="14"/>
                                                 <color key="textColor" red="1" green="1" blue="0.0" alpha="1" colorSpace="calibratedRGB"/>
                                                 <nil key="highlightedColor"/>
@@ -532,6 +533,7 @@
                         <outlet property="manualHUDFocusView" destination="MDr-ZD-uoq" id="zuW-eL-JvW"/>
                         <outlet property="manualHUDLensStabilizationView" destination="tCR-0s-Q5n" id="j8Z-6n-aIy"/>
                         <outlet property="manualHUDWhiteBalanceView" destination="yor-x3-1IR" id="P5q-Me-f5b"/>
+                        <outlet property="manualSegments" destination="543-NV-2bk" id="Q7c-ii-9fY"/>
                         <outlet property="previewView" destination="9Za-05-zwY" id="llM-aG-xvt"/>
                         <outlet property="recordButton" destination="mcl-en-N2e" id="i4O-yh-h1k"/>
                         <outlet property="resumeButton" destination="gwL-zO-1Pw" id="xvg-vj-GpD"/>
@@ -547,7 +549,6 @@
                 </viewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="4sS-pb-l0E" userLabel="First Responder" sceneMemberID="firstResponder"/>
                 <tapGestureRecognizer id="CON-0p-q28">
-                    <pressTypeMask key="allowedPressTypes"/>
                     <connections>
                         <action selector="focusAndExposeTap:" destination="zFy-Vn-e8f" id="4RN-pT-u3e"/>
                     </connections>
