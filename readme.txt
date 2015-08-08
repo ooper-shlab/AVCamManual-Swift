@@ -10,6 +10,10 @@ As this is a line-by-line translation from the original sample code, "redistribu
 Some faults caused by my translation may exist. Not all features tested.
 You should not contact to Apple or SHLab(jp) about any faults caused by my translation.
 
+### Build
+
+Xcode 7 beta 5, iOS 9 SDK
+
 ### Runtime
 
 iOS 8.0

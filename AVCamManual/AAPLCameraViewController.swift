@@ -655,8 +655,8 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
                 AAPLCameraViewController.setFlashMode(.Off, forDevice: self.videoDevice!)
                 
                 // Start recording to a temporary file.
-                let outputFileName = NSProcessInfo.processInfo().globallyUniqueString
-                let outputFilePath = NSTemporaryDirectory().stringByAppendingPathComponent(outputFileName.stringByAppendingPathExtension("mov")!)
+                let outputFileName = NSProcessInfo.processInfo().globallyUniqueString as NSString
+                let outputFilePath = (NSTemporaryDirectory() as NSString).stringByAppendingPathComponent(outputFileName.stringByAppendingPathExtension("mov")!)
                 self.movieFileOutput!.startRecordingToOutputFileURL(NSURL(fileURLWithPath: outputFilePath), recordingDelegate: self)
             } else {
                 self.movieFileOutput!.stopRecording()
@@ -763,8 +763,8 @@ class AAPLCameraViewController: UIViewController, AVCaptureFileOutputRecordingDe
                                             }
                                     })
                                 } else {
-                                    let temporaryFileName = NSProcessInfo().globallyUniqueString
-                                    let temporaryFilePath = NSTemporaryDirectory().stringByAppendingPathComponent(temporaryFileName.stringByAppendingPathExtension("jpg")!)
+                                    let temporaryFileName = NSProcessInfo().globallyUniqueString as NSString
+                                    let temporaryFilePath = (NSTemporaryDirectory() as NSString).stringByAppendingPathComponent(temporaryFileName.stringByAppendingPathExtension("jpg")!)
                                     let temporaryFileURL = NSURL(fileURLWithPath: temporaryFilePath)
                                     
                                     PHPhotoLibrary.sharedPhotoLibrary().performChanges({
