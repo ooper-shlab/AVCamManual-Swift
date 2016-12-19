@@ -21,28 +21,28 @@ class AAPLAppDelegate: UIResponder, UIApplicationDelegate {
     
     var window: UIWindow?
     
-    func application(application: UIApplication, didFinishLaunchingWithOptions launchOptions: [NSObject : AnyObject]?) -> Bool {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplicationLaunchOptionsKey: Any]?) -> Bool {
         // We use the device orientation to set the video orientation of the video preview,
         // and to set the orientation of still images and recorded videos.
         
         // Inform the device that we want to use the device orientation.
-        UIDevice.currentDevice().beginGeneratingDeviceOrientationNotifications()
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
         return true
     }
     
-    func applicationWillTerminate(application: UIApplication) {
+    func applicationWillTerminate(_ application: UIApplication) {
         // Inform the device that we no longer require access the device orientation.
-        UIDevice.currentDevice().endGeneratingDeviceOrientationNotifications()
+        UIDevice.current.endGeneratingDeviceOrientationNotifications()
     }
     
-    func applicationWillEnterForeground(application: UIApplication) {
+    func applicationWillEnterForeground(_ application: UIApplication) {
         // Inform the device that we want to use the device orientation again.
-        UIDevice.currentDevice().beginGeneratingDeviceOrientationNotifications()
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
     }
     
-    func applicationDidEnterBackground(application: UIApplication) {
+    func applicationDidEnterBackground(_ application: UIApplication) {
         // Let the device power down the accelerometer if not used elsewhere while backgrounded.
-        UIDevice.currentDevice().endGeneratingDeviceOrientationNotifications()
+        UIDevice.current.endGeneratingDeviceOrientationNotifications()
     }
     
 }
