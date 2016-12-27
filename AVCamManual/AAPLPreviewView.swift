@@ -19,7 +19,7 @@ import AVFoundation
 @objc(AAPLPreviewView)
 class AAPLPreviewView: UIView {
     
-    override class func layerClass() -> AnyClass {
+    override class var layerClass : AnyClass {
         return AVCaptureVideoPreviewLayer.self
     }
     

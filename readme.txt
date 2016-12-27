@@ -12,7 +12,7 @@ You should not contact to Apple or SHLab(jp) about any faults caused by my trans
 
 ### Build
 
-Xcode 7.3, iOS 9 SDK
+Xcode 8.2.1, iOS 10 SDK
 
 ### Runtime
 
