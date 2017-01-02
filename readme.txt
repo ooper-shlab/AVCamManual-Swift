@@ -1,10 +1,10 @@
-AVCamManual
+#AVCamManual: Extending AVCam to Use Manual Capture API
 
 Translated by OOPer in cooperation with shlab.jp, on 2015/5/3.
 
 Based on
-https://developer.apple.com/library/prerelease/ios/samplecode/AVCamManual/Introduction/Intro.html#//apple_ref/doc/uid/TP40014578
-2015-07-21.
+<https://developer.apple.com/library/content/samplecode/AVCamManual/Introduction/Intro.html#//apple_ref/doc/uid/TP40014578>
+2016-09-15.
 
 As this is a line-by-line translation from the original sample code, "redistribute the Apple Software in its entirety and without modifications" would apply. See LICENSE.txt .
 Some faults caused by my translation may exist. Not all features tested.
@@ -17,3 +17,5 @@ Xcode 8.2.1, iOS 10 SDK
 ### Runtime
 
 iOS 8.0
+
+(Compatibility code is not well-tested.)

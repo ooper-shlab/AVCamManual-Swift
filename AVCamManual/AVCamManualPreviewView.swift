@@ -16,8 +16,8 @@ Camera preview.
 import UIKit
 import AVFoundation
 
-@objc(AAPLPreviewView)
-class AAPLPreviewView: UIView {
+@objc(AVCamManualPreviewView)
+class AVCamManualPreviewView: UIView {
     
     override class var layerClass : AnyClass {
         return AVCaptureVideoPreviewLayer.self
