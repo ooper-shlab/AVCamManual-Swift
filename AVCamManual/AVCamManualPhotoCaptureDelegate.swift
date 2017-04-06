@@ -91,7 +91,7 @@ class AVCamManualPhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate, 
                         if let temporaryDNGFileURL = temporaryDNGFileURL {
                             let companionDNGResourceOptions = PHAssetResourceCreationOptions()
                             companionDNGResourceOptions.shouldMoveFile = true
-                            creationRequest.addResource(with: .photo, fileURL: temporaryDNGFileURL, options: companionDNGResourceOptions)
+                            creationRequest.addResource(with: .alternatePhoto, fileURL: temporaryDNGFileURL, options: companionDNGResourceOptions)
                         }
                     } else {
                         let dngResourceOptions = PHAssetResourceCreationOptions()
