@@ -1,4 +1,4 @@
-#AVCamManual: Extending AVCam to Use Manual Capture API
+# AVCamManual: Extending AVCam to Use Manual Capture API
 
 Translated by OOPer in cooperation with shlab.jp, on 2015/5/3.
 
@@ -12,7 +12,7 @@ You should not contact to Apple or SHLab(jp) about any faults caused by my trans
 
 ### Build
 
-Xcode 8.2.1, iOS 10 SDK
+Xcode 9 beta 5, iOS 11 SDK
 
 ### Runtime
 

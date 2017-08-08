@@ -44,21 +44,28 @@ private enum AVCamManualCaptureMode: Int {
 //### Compatibility types...
 private protocol AVCaptureDeviceDiscoverySessionType: class {
     @available(iOS 10.0, *)
-    var devices: [AVCaptureDevice]! { get }
+    var devices: [AVCaptureDevice] { get }
 }
 @available(iOS 10.0, *)
-extension AVCaptureDeviceDiscoverySession: AVCaptureDeviceDiscoverySessionType {}
+extension AVCaptureDevice.DiscoverySession: AVCaptureDeviceDiscoverySessionType {}
 @objc protocol AVCapturePhotoOutputType {
     @available(iOS 10.0, *)
     var isLensStabilizationDuringBracketedCaptureSupported: Bool {get}
+    //### `availableRawPhotoPixelFormatTypes` is temporarily renamed to `__availableRawPhotoPixelFormatTypes`,
+    //### Maybe more Swiftish refinement is planned, but not yet completed.
     @available(iOS 10.0, *)
-    var availableRawPhotoPixelFormatTypes: [NSNumber] {get}
+    @objc(availableRawPhotoPixelFormatTypes)
+    var __availableRawPhotoPixelFormatTypes: [NSNumber] {get}
     @available(iOS 10.0, *)
     var isHighResolutionCaptureEnabled: Bool {get @objc(setHighResolutionCaptureEnabled:) set}
     @available(iOS 10.0, *)
-    var supportedFlashModes: [NSNumber] {get}
+    //### `supportedFlashModes` is temporarily renamed to `__supportedFlashModes`,
+    //### Maybe more Swiftish refinement is planned, but not yet completed.
+    @objc(supportedFlashModes)
+    var __supportedFlashModes: [NSNumber] {get}
     @available(iOS 10.0, *)
-    func connection(withMediaType mediaType: String!) -> AVCaptureConnection!
+    @objc(connectionWithMediaType:)
+    func connection(with mediaType: AVMediaType) -> AVCaptureConnection?
     @available(iOS 10.0, *)
     @objc(capturePhotoWithSettings:delegate:)
     func capturePhoto(with settings: AVCapturePhotoSettings, delegate: AVCapturePhotoCaptureDelegate)
@@ -81,14 +88,14 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
     
     @IBOutlet weak var manualHUD: UIView!
     
-    private var focusModes: [AVCaptureFocusMode] = []
+    private var focusModes: [AVCaptureDevice.FocusMode] = []
     @IBOutlet weak var manualHUDFocusView: UIView!
     @IBOutlet weak var focusModeControl: UISegmentedControl!
     @IBOutlet weak var lensPositionSlider: UISlider!
     @IBOutlet weak var lensPositionNameLabel: UILabel!
     @IBOutlet weak var lensPositionValueLabel: UILabel!
     
-    private var exposureModes: [AVCaptureExposureMode] = []
+    private var exposureModes: [AVCaptureDevice.ExposureMode] = []
     @IBOutlet weak var manualHUDExposureView: UIView!
     @IBOutlet weak var exposureModeControl: UISegmentedControl!
     @IBOutlet weak var exposureDurationSlider: UISlider!
@@ -104,7 +111,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
     @IBOutlet weak var exposureTargetOffsetNameLabel: UILabel!
     @IBOutlet weak var exposureTargetOffsetValueLabel: UILabel!
     
-    private var whiteBalanceModes: [AVCaptureWhiteBalanceMode] = []
+    private var whiteBalanceModes: [AVCaptureDevice.WhiteBalanceMode] = []
     @IBOutlet weak var manualHUDWhiteBalanceView: UIView!
     @IBOutlet weak var whiteBalanceModeControl: UISegmentedControl!
     @IBOutlet weak var temperatureSlider: UISlider!
@@ -122,13 +129,13 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
     
     // Session management.
     private var sessionQueue: DispatchQueue!
-    dynamic var session: AVCaptureSession!
-    dynamic var videoDeviceInput: AVCaptureDeviceInput?
+    @objc dynamic var session: AVCaptureSession!
+    @objc dynamic var videoDeviceInput: AVCaptureDeviceInput?
     private var videoDeviceDiscoverySession: AVCaptureDeviceDiscoverySessionType?
-    dynamic var videoDevice: AVCaptureDevice?
-    dynamic var movieFileOutput: AVCaptureMovieFileOutput?
-    dynamic var photoOutput: AVCapturePhotoOutputType?
-    dynamic var stillImageOutput: AVCaptureStillImageOutput? //### iOS < 10.0
+    @objc dynamic var videoDevice: AVCaptureDevice?
+    @objc dynamic var movieFileOutput: AVCaptureMovieFileOutput?
+    @objc dynamic var photoOutput: AVCapturePhotoOutputType?
+    @objc dynamic var stillImageOutput: AVCaptureStillImageOutput? //### iOS < 10.0
     
     private var inProgressPhotoCaptureDelegates: [Int64: AVCamManualPhotoCaptureDelegateType] = [:]
     
@@ -162,8 +169,8 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         
         // Create a device discovery session
         if #available(iOS 10.0, *) {
-            let deviceTypes: [AVCaptureDeviceType] = [.builtInWideAngleCamera, .builtInDuoCamera, .builtInTelephotoCamera]
-            self.videoDeviceDiscoverySession = AVCaptureDeviceDiscoverySession(deviceTypes: deviceTypes, mediaType: AVMediaTypeVideo, position: .unspecified)
+            let deviceTypes: [AVCaptureDevice.DeviceType] = [AVCaptureDevice.DeviceType.builtInWideAngleCamera, AVCaptureDevice.DeviceType.builtInDuoCamera, AVCaptureDevice.DeviceType.builtInTelephotoCamera]
+            self.videoDeviceDiscoverySession = AVCaptureDevice.DiscoverySession(deviceTypes: deviceTypes, mediaType: AVMediaType.video, position: .unspecified)
         }
         
         // Setup the preview view.
@@ -176,7 +183,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         
         // Check video authorization status. Video access is required and audio access is optional.
         // If audio access is denied, audio is not recorded during movie recording.
-        switch AVCaptureDevice.authorizationStatus(forMediaType: AVMediaTypeVideo) {
+        switch AVCaptureDevice.authorizationStatus(for: AVMediaType.video) {
         case .authorized:
             // The user has previously granted access to the camera.
             break
@@ -185,7 +192,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
             // We suspend the session queue to delay session running until the access request has completed.
             // Note that audio access will be implicitly requested when we create an AVCaptureDeviceInput for audio during session setup.
             self.sessionQueue.suspend()
-            AVCaptureDevice.requestAccess(forMediaType: AVMediaTypeVideo) {granted in
+            AVCaptureDevice.requestAccess(for: AVMediaType.video) {granted in
                 if !granted {
                     self.setupResult = .cameraNotAuthorized
                 }
@@ -263,7 +270,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         
         if UIDeviceOrientationIsPortrait(deviceOrientation) || UIDeviceOrientationIsLandscape(deviceOrientation) {
             let previewLayer = self.previewView.layer as! AVCaptureVideoPreviewLayer
-            previewLayer.connection.videoOrientation = AVCaptureVideoOrientation(rawValue: deviceOrientation.rawValue)!
+            previewLayer.connection?.videoOrientation = AVCaptureVideoOrientation(rawValue: deviceOrientation.rawValue)!
         }
     }
     
@@ -348,8 +355,8 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
             }
         }
         
-        let whiteBalanceGains = self.videoDevice?.deviceWhiteBalanceGains ?? AVCaptureWhiteBalanceGains()
-        let whiteBalanceTemperatureAndTint = self.videoDevice?.temperatureAndTintValues(forDeviceWhiteBalanceGains: whiteBalanceGains) ?? AVCaptureWhiteBalanceTemperatureAndTintValues()
+        let whiteBalanceGains = self.videoDevice?.deviceWhiteBalanceGains ?? AVCaptureDevice.WhiteBalanceGains()
+        let whiteBalanceTemperatureAndTint = self.videoDevice?.temperatureAndTintValues(for: whiteBalanceGains) ?? AVCaptureDevice.WhiteBalanceTemperatureAndTintValues()
         
         self.temperatureSlider.minimumValue = 3000
         self.temperatureSlider.maximumValue = 8000
@@ -437,14 +444,14 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         
         self.session.beginConfiguration()
         
-        self.session.sessionPreset = AVCaptureSessionPresetPhoto
+        self.session.sessionPreset = AVCaptureSession.Preset.photo
         
         // Add video input
         let videoDevice: AVCaptureDevice!
         if #available(iOS 10.0, *) {
-            videoDevice = AVCaptureDevice.defaultDevice(withDeviceType: .builtInWideAngleCamera, mediaType:AVMediaTypeVideo, position: .unspecified)
+            videoDevice = AVCaptureDevice.default(AVCaptureDevice.DeviceType.builtInWideAngleCamera, for:AVMediaType.video, position: .unspecified)
         } else {
-            videoDevice = AVCamManualCameraViewController.deviceWithMediaType(AVMediaTypeVideo, preferringPosition: .back)
+            videoDevice = AVCamManualCameraViewController.deviceWithMediaType(AVMediaType.video.rawValue, preferringPosition: .back)
         }
         let videoDeviceInput: AVCaptureDeviceInput
         do {
@@ -479,7 +486,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
                 }
                 
                 let previewLayer = self.previewView.layer as! AVCaptureVideoPreviewLayer
-                previewLayer.connection.videoOrientation = initialVideoOrientation
+                previewLayer.connection?.videoOrientation = initialVideoOrientation
             }
         } else {
             NSLog("Could not add video device input to the session")
@@ -489,10 +496,10 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         }
         
         // Add audio input
-        let audioDevice = AVCaptureDevice.defaultDevice(withMediaType: AVMediaTypeAudio)
+        let audioDevice = AVCaptureDevice.default(for: AVMediaType.audio)
         let audioDeviceInput: AVCaptureDeviceInput!
         do {
-            audioDeviceInput = try AVCaptureDeviceInput(device: audioDevice)
+            audioDeviceInput = try AVCaptureDeviceInput(device: audioDevice!)
         } catch let error {
             audioDeviceInput = nil
             NSLog("Could not create audio device input: \(error)")
@@ -522,7 +529,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
             let movieFileOutput = AVCaptureMovieFileOutput()
             if self.session.canAddOutput(movieFileOutput) {
                 self.session.addOutput(movieFileOutput)
-                if let connection = movieFileOutput.connection(withMediaType: AVMediaTypeVideo), connection.isVideoStabilizationSupported {
+                if let connection = movieFileOutput.connection(with: AVMediaType.video), connection.isVideoStabilizationSupported {
                     connection.preferredVideoStabilizationMode = .auto
                 }
                 self.movieFileOutput = movieFileOutput
@@ -570,21 +577,21 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         if lensStabilizationEnabled && photoOutput.isLensStabilizationDuringBracketedCaptureSupported {
             let bracketedSettings: [AVCaptureBracketedStillImageSettings]
             if self.videoDevice?.exposureMode == .custom {
-                bracketedSettings = [AVCaptureManualExposureBracketedStillImageSettings.manualExposureSettings(withExposureDuration: AVCaptureExposureDurationCurrent, iso: AVCaptureISOCurrent)]
+                bracketedSettings = [AVCaptureManualExposureBracketedStillImageSettings.manualExposureSettings(exposureDuration: AVCaptureDevice.currentExposureDuration, iso: AVCaptureDevice.currentISO)]
             } else {
-                bracketedSettings = [AVCaptureAutoExposureBracketedStillImageSettings.autoExposureSettings(withExposureTargetBias: AVCaptureExposureTargetBiasCurrent)]
+                bracketedSettings = [AVCaptureAutoExposureBracketedStillImageSettings.autoExposureSettings(exposureTargetBias: AVCaptureDevice.currentExposureTargetBias)]
             }
             
-            if rawEnabled && !photoOutput.availableRawPhotoPixelFormatTypes.isEmpty {
-                photoSettings = AVCapturePhotoBracketSettings(rawPixelFormatType: photoOutput.availableRawPhotoPixelFormatTypes[0].uint32Value, processedFormat: nil, bracketedSettings: bracketedSettings)
+            if rawEnabled && !photoOutput.__availableRawPhotoPixelFormatTypes.isEmpty {
+                photoSettings = AVCapturePhotoBracketSettings(rawPixelFormatType: photoOutput.__availableRawPhotoPixelFormatTypes[0].uint32Value, processedFormat: nil, bracketedSettings: bracketedSettings)
             } else {
                 photoSettings = AVCapturePhotoBracketSettings(rawPixelFormatType: 0, processedFormat: [AVVideoCodecKey: AVVideoCodecJPEG], bracketedSettings: bracketedSettings)
             }
             
             (photoSettings as! AVCapturePhotoBracketSettings).isLensStabilizationEnabled = true
         } else {
-            if rawEnabled && !photoOutput.availableRawPhotoPixelFormatTypes.isEmpty {
-                photoSettings = AVCapturePhotoSettings(rawPixelFormatType: photoOutput.availableRawPhotoPixelFormatTypes[0].uint32Value, processedFormat: [AVVideoCodecKey : AVVideoCodecJPEG])
+            if rawEnabled && !photoOutput.__availableRawPhotoPixelFormatTypes.isEmpty {
+                photoSettings = AVCapturePhotoSettings(rawPixelFormatType: photoOutput.__availableRawPhotoPixelFormatTypes[0].uint32Value, processedFormat: [AVVideoCodecKey : AVVideoCodecJPEG])
             } else {
                 photoSettings = AVCapturePhotoSettings()
             }
@@ -593,12 +600,14 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
             if self.videoDevice?.exposureMode == .custom {
                 photoSettings?.flashMode = .off
             } else {
-                photoSettings?.flashMode = photoOutput.supportedFlashModes.contains(AVCaptureFlashMode.auto.rawValue as NSNumber) ? .auto : .off
+                photoSettings?.flashMode = photoOutput.__supportedFlashModes.contains(AVCaptureDevice.FlashMode.auto.rawValue as NSNumber) ? .auto : .off
             }
         }
         
-        if !(photoSettings?.availablePreviewPhotoPixelFormatTypes.isEmpty ?? true) {
-            photoSettings?.previewPhotoFormat = [kCVPixelBufferPixelFormatTypeKey as String: photoSettings!.availablePreviewPhotoPixelFormatTypes[0]] // The first format in the array is the preferred format
+        //### `availablePreviewPhotoPixelFormatTypes` is temporarily renamed to `__availablePreviewPhotoPixelFormatTypes`,
+        //### Maybe more Swiftish refinement is planned, but not yet completed.
+        if !(photoSettings?.__availablePreviewPhotoPixelFormatTypes.isEmpty ?? true) {
+            photoSettings?.previewPhotoFormat = [kCVPixelBufferPixelFormatTypeKey as String: photoSettings!.__availablePreviewPhotoPixelFormatTypes[0]] // The first format in the array is the preferred format
         }
         
         if self.videoDevice?.exposureMode == .custom {
@@ -642,8 +651,8 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
                 // Remove the AVCaptureMovieFileOutput from the session because movie recording is not supported with AVCaptureSessionPresetPhoto. Additionally, Live Photo
                 // capture is not supported when an AVCaptureMovieFileOutput is connected to the session.
                 self.session.beginConfiguration()
-                self.session.removeOutput(self.movieFileOutput)
-                self.session.sessionPreset = AVCaptureSessionPresetPhoto
+                self.session.removeOutput(self.movieFileOutput!)
+                self.session.sessionPreset = AVCaptureSession.Preset.photo
                 self.session.commitConfiguration()
                 
                 self.movieFileOutput = nil
@@ -656,8 +665,8 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
                 if self.session.canAddOutput(movieFileOutput) {
                     self.session.beginConfiguration()
                     self.session.addOutput(movieFileOutput)
-                    self.session.sessionPreset = AVCaptureSessionPresetHigh
-                    let connection = movieFileOutput.connection(withMediaType: AVMediaTypeVideo)
+                    self.session.sessionPreset = AVCaptureSession.Preset.high
+                    let connection = movieFileOutput.connection(with: AVMediaType.video)
                     if connection?.isVideoStabilizationSupported ?? false {
                         connection?.preferredVideoStabilizationMode = .auto
                     }
@@ -717,7 +726,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
             self.session.beginConfiguration()
             
             // Remove the existing device input first, since using the front and back camera simultaneously is not supported
-            self.session.removeInput(self.videoDeviceInput)
+            self.session.removeInput(self.videoDeviceInput!)
             if self.session.canAddInput(newVideoDeviceInput) {
                 NotificationCenter.default.removeObserver(self, name: .AVCaptureDeviceSubjectAreaDidChange, object: self.videoDevice)
                 
@@ -727,10 +736,10 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
                 self.videoDeviceInput = newVideoDeviceInput
                 self.videoDevice = newVideoDevice
             } else {
-                self.session.addInput(self.videoDeviceInput)
+                self.session.addInput(self.videoDeviceInput!)
             }
             
-            let connection = self.movieFileOutput?.connection(withMediaType: AVMediaTypeVideo)
+            let connection = self.movieFileOutput?.connection(with: AVMediaType.video)
             if connection?.isVideoStabilizationSupported ?? false {
                 connection!.preferredVideoStabilizationMode = .auto
             }
@@ -771,14 +780,14 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         
         do {
             try self.videoDevice!.lockForConfiguration()
-            self.videoDevice!.setFocusModeLockedWithLensPosition(control.value, completionHandler: nil)
+            self.videoDevice!.setFocusModeLocked(lensPosition: control.value, completionHandler: nil)
             self.videoDevice!.unlockForConfiguration()
         } catch let error {
             NSLog("Could not lock device for configuration: \(error)")
         }
     }
     
-    private func focusWithMode(_ focusMode: AVCaptureFocusMode, exposeWithMode exposureMode: AVCaptureExposureMode, atDevicePoint point: CGPoint, monitorSubjectAreaChange: Bool) {
+    private func focusWithMode(_ focusMode: AVCaptureDevice.FocusMode, exposeWithMode exposureMode: AVCaptureDevice.ExposureMode, atDevicePoint point: CGPoint, monitorSubjectAreaChange: Bool) {
         guard let device = self.videoDevice else {
             print("videoDevice unavailable")
             return
@@ -808,7 +817,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
     }
     
     @IBAction func focusAndExposeTap(_ gestureRecognizer: UIGestureRecognizer) {
-        let devicePoint = (self.previewView.layer as! AVCaptureVideoPreviewLayer).captureDevicePointOfInterest(for: gestureRecognizer.location(in: gestureRecognizer.view))
+        let devicePoint = (self.previewView.layer as! AVCaptureVideoPreviewLayer).captureDevicePointConverted(fromLayerPoint: gestureRecognizer.location(in: gestureRecognizer.view))
         self.focusWithMode(.continuousAutoFocus, exposeWithMode: .continuousAutoExposure, atDevicePoint: devicePoint, monitorSubjectAreaChange: true)
     }
     
@@ -838,7 +847,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         
         do {
             try self.videoDevice!.lockForConfiguration()
-            self.videoDevice!.setExposureModeCustomWithDuration(CMTimeMakeWithSeconds(newDurationSeconds, 1000*1000*1000), iso: AVCaptureISOCurrent, completionHandler: nil)
+            self.videoDevice!.setExposureModeCustom(duration: CMTimeMakeWithSeconds(newDurationSeconds, 1000*1000*1000), iso: AVCaptureDevice.currentISO, completionHandler: nil)
             self.videoDevice!.unlockForConfiguration()
         } catch let error {
             NSLog("Could not lock device for configuration: \(error)")
@@ -849,7 +858,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         
         do {
             try self.videoDevice!.lockForConfiguration()
-            self.videoDevice!.setExposureModeCustomWithDuration(AVCaptureExposureDurationCurrent, iso: control.value, completionHandler: nil)
+            self.videoDevice!.setExposureModeCustom(duration: AVCaptureDevice.currentExposureDuration, iso: control.value, completionHandler: nil)
             self.videoDevice!.unlockForConfiguration()
         } catch let error {
             NSLog("Could not lock device for configuration: \(error)")
@@ -884,12 +893,12 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         }
     }
     
-    private func setWhiteBalanceGains(_ gains: AVCaptureWhiteBalanceGains) {
+    private func setWhiteBalanceGains(_ gains: AVCaptureDevice.WhiteBalanceGains) {
         
         do {
             try self.videoDevice!.lockForConfiguration()
             let normalizedGains = self.normalizedGains(gains) // Conversion can yield out-of-bound values, cap to limits
-            self.videoDevice!.setWhiteBalanceModeLockedWithDeviceWhiteBalanceGains(normalizedGains, completionHandler: nil)
+            self.videoDevice!.setWhiteBalanceModeLocked(with: normalizedGains, completionHandler: nil)
             self.videoDevice!.unlockForConfiguration()
         } catch let error {
             NSLog("Could not lock device for configuration: \(error)")
@@ -897,7 +906,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
     }
     
     @IBAction func changeTemperature(_: AnyObject) {
-        let temperatureAndTint = AVCaptureWhiteBalanceTemperatureAndTintValues(
+        let temperatureAndTint = AVCaptureDevice.WhiteBalanceTemperatureAndTintValues(
             temperature: self.temperatureSlider.value,
             tint: self.tintSlider.value
         )
@@ -906,7 +915,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
     }
     
     @IBAction func changeTint(_: AnyObject) {
-        let temperatureAndTint = AVCaptureWhiteBalanceTemperatureAndTintValues(
+        let temperatureAndTint = AVCaptureDevice.WhiteBalanceTemperatureAndTintValues(
             temperature: self.temperatureSlider.value,
             tint: self.tintSlider.value
         )
@@ -918,7 +927,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         self.setWhiteBalanceGains(self.videoDevice!.grayWorldDeviceWhiteBalanceGains)
     }
     
-    private func normalizedGains(_ gains: AVCaptureWhiteBalanceGains) -> AVCaptureWhiteBalanceGains {
+    private func normalizedGains(_ gains: AVCaptureDevice.WhiteBalanceGains) -> AVCaptureDevice.WhiteBalanceGains {
         var g = gains
         
         g.redGain = max(1.0, g.redGain)
@@ -946,14 +955,14 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         // Retrieve the video preview layer's video orientation on the main queue before entering the session queue
         // We do this to ensure UI elements are accessed on the main thread and session configuration is done on the session queue
         let previewLayer = self.previewView.layer as! AVCaptureVideoPreviewLayer
-        let videoPreviewLayerVideoOrientation = previewLayer.connection.videoOrientation
+        let videoPreviewLayerVideoOrientation = previewLayer.connection?.videoOrientation
         
         let settings = self.currentPhotoSettings()
         self.sessionQueue.async {
             
             // Update the orientation on the photo output video connection before capturing
-            let photoOutputConnection = self.photoOutput?.connection(withMediaType: AVMediaTypeVideo)
-            photoOutputConnection?.videoOrientation = videoPreviewLayerVideoOrientation
+            let photoOutputConnection = self.photoOutput?.connection(with: .video)
+            photoOutputConnection?.videoOrientation = videoPreviewLayerVideoOrientation!
             
             // Use a separate object for the photo capture delegate to isolate each capture life cycle.
             let photoCaptureDelegate = AVCamManualPhotoCaptureDelegate(requestedPhotoSettings: settings!, willCapturePhotoAnimation: {
@@ -992,7 +1001,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         // Retrieve the video preview layer's video orientation on the main queue before entering the session queue. We do this to ensure UI
         // elements are accessed on the main thread and session configuration is done on the session queue.
         let previewLayer = self.previewView.layer as! AVCaptureVideoPreviewLayer
-        let previewLayerVideoOrientation = previewLayer.connection.videoOrientation
+        let previewLayerVideoOrientation = previewLayer.connection?.videoOrientation
         self.sessionQueue.async {
             if !(self.movieFileOutput?.isRecording ?? false) {
                 if UIDevice.current.isMultitaskingSupported {
@@ -1003,8 +1012,8 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
                     // -[captureOutput:didFinishRecordingToOutputFileAtURL:fromConnections:error:] after the recorded file has been saved.
                     self.backgroundRecordingID = UIApplication.shared.beginBackgroundTask(expirationHandler: nil)
                 }
-                let movieConnection = self.movieFileOutput?.connection(withMediaType: AVMediaTypeVideo)
-                movieConnection?.videoOrientation = previewLayerVideoOrientation
+                let movieConnection = self.movieFileOutput?.connection(with: AVMediaType.video)
+                movieConnection?.videoOrientation = previewLayerVideoOrientation!
                 
                 // Start recording to temporary file
                 let outputFileName = ProcessInfo.processInfo.globallyUniqueString
@@ -1014,14 +1023,14 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
                 } else {
                     outputFileURL = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true).appendingPathComponent(outputFileName).appendingPathExtension("mov")
                 }
-                self.movieFileOutput!.startRecording(toOutputFileURL: outputFileURL, recordingDelegate: self)
+                self.movieFileOutput!.startRecording(to: outputFileURL, recordingDelegate: self)
             } else {
                 self.movieFileOutput!.stopRecording()
             }
         }
     }
     
-    func capture(_ captureOutput: AVCaptureFileOutput!, didStartRecordingToOutputFileAt fileURL: URL!, fromConnections connections: [Any]!) {
+    func fileOutput(_ captureOutput: AVCaptureFileOutput, didStartRecordingTo fileURL: URL, from connections: [AVCaptureConnection]) {
         // Enable the Record button to let the user stop the recording.
         DispatchQueue.main.async {
             self.recordButton.isEnabled = true
@@ -1029,7 +1038,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         }
     }
     
-    func capture(_ captureOutput: AVCaptureFileOutput!, didFinishRecordingToOutputFileAt outputFileURL: URL!, fromConnections connections: [Any]!, error: Error!) {
+    func fileOutput(_ captureOutput: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
         // Note that currentBackgroundRecordingID is used to end the background task associated with this recording.
         // This allows a new recording to be started, associated with a new UIBackgroundTaskIdentifier, once the movie file output's isRecording property
         // is back to NO — which happens sometime after this method returns.
@@ -1092,7 +1101,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
             if #available(iOS 10.0, *) {
                 self.cameraButton.isEnabled = (self.videoDeviceDiscoverySession?.devices.count ?? 0 > 1)
             } else {
-                self.cameraButton.isEnabled = (AVCaptureDevice.devices(withMediaType: AVMediaTypeVideo).count > 1)
+                self.cameraButton.isEnabled = (AVCaptureDevice.devices(for: AVMediaType.video).count > 1)
             }
             self.recordButton.isEnabled = self.captureModeControl.selectedSegmentIndex == AVCamManualCaptureMode.movie.rawValue
             self.recordButton.setTitle(NSLocalizedString("Record", comment: "Recording button record title"), for: .normal)
@@ -1164,13 +1173,13 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         switch context {
         case &FocusModeContext:
             if let value = newValue as? Int {
-                let newMode = AVCaptureFocusMode(rawValue: value)!
+                let newMode = AVCaptureDevice.FocusMode(rawValue: value)!
                 DispatchQueue.main.async {
                     self.focusModeControl.selectedSegmentIndex = self.focusModes.index(of: newMode)!
                     self.lensPositionSlider.isEnabled = (newMode == .locked)
                     
                     if let old = oldValue as? Int {
-                        let oldMode = AVCaptureFocusMode(rawValue: old)!
+                        let oldMode = AVCaptureDevice.FocusMode(rawValue: old)!
                         NSLog("focus mode: \(oldMode) -> \(newMode)")
                     } else {
                         NSLog("focus mode: \(newMode)")
@@ -1192,9 +1201,9 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
             }
         case &ExposureModeContext:
             if let value = newValue as? Int {
-                let newMode = AVCaptureExposureMode(rawValue: value)!
+                let newMode = AVCaptureDevice.ExposureMode(rawValue: value)!
                 if let old = oldValue as? Int {
-                    let oldMode = AVCaptureExposureMode(rawValue: old)!
+                    let oldMode = AVCaptureDevice.ExposureMode(rawValue: old)!
                     /*
                      It’s important to understand the relationship between exposureDuration and the minimum frame rate as represented by activeVideoMaxFrameDuration.
                      In manual mode, if exposureDuration is set to a value that's greater than activeVideoMaxFrameDuration, then activeVideoMaxFrameDuration will
@@ -1220,7 +1229,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
                     self.ISOSlider.isEnabled = (newMode == .custom)
                     
                     if let old = oldValue as? Int {
-                        let oldMode = AVCaptureExposureMode(rawValue: old)!
+                        let oldMode = AVCaptureDevice.ExposureMode(rawValue: old)!
                         NSLog("exposure mode: \(oldMode) -> \(newMode)")
                     } else {
                         NSLog("exposure mode: \(newMode)")
@@ -1279,24 +1288,24 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
             }
         case &WhiteBalanceModeContext:
             if let value = newValue as? Int {
-                let newMode = AVCaptureWhiteBalanceMode(rawValue: value)!
+                let newMode = AVCaptureDevice.WhiteBalanceMode(rawValue: value)!
                 DispatchQueue.main.async {
                     self.whiteBalanceModeControl.selectedSegmentIndex = self.whiteBalanceModes.index(of: newMode)!
                     self.temperatureSlider.isEnabled = (newMode == .locked)
                     self.tintSlider.isEnabled = (newMode == .locked)
                     
                     if let old = oldValue as? Int {
-                        let oldMode = AVCaptureWhiteBalanceMode(rawValue: old)!
+                        let oldMode = AVCaptureDevice.WhiteBalanceMode(rawValue: old)!
                         NSLog("white balance mode: \(oldMode) -> \(newMode)")
                     }
                 }
             }
         case &DeviceWhiteBalanceGainsContext:
             if let value = newValue as? NSValue {
-                var newGains = AVCaptureWhiteBalanceGains()
+                var newGains = AVCaptureDevice.WhiteBalanceGains()
                 value.getValue(&newGains)
                 
-                let newTemperatureAndTint = self.videoDevice!.temperatureAndTintValues(forDeviceWhiteBalanceGains: newGains)
+                let newTemperatureAndTint = self.videoDevice!.temperatureAndTintValues(for: newGains)
                 let whiteBalanceMode = self.videoDevice!.whiteBalanceMode
                 DispatchQueue.main.async {
                     if whiteBalanceMode != .locked {
@@ -1318,7 +1327,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
                 if #available(iOS 10.0, *) {
                     self.cameraButton.isEnabled = isRunning && (self.videoDeviceDiscoverySession?.devices.count ?? 0 > 1)
                 } else {
-                    self.cameraButton.isEnabled = (isRunning && AVCaptureDevice.devices(withMediaType: AVMediaTypeVideo).count > 1)
+                    self.cameraButton.isEnabled = (isRunning && AVCaptureDevice.devices(for: AVMediaType.video).count > 1)
                 }
                 self.recordButton.isEnabled = isRunning && (self.captureModeControl.selectedSegmentIndex == AVCamManualCaptureMode.movie.rawValue)
                 self.photoButton.isEnabled = isRunning
@@ -1359,12 +1368,12 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         }
     }
     
-    func subjectAreaDidChange(_ notificaiton: Notification) {
+    @objc func subjectAreaDidChange(_ notificaiton: Notification) {
         let devicePoint = CGPoint(x: 0.5, y: 0.5)
         self.focusWithMode(.continuousAutoFocus, exposeWithMode: .continuousAutoExposure, atDevicePoint: devicePoint, monitorSubjectAreaChange: false)
     }
     
-    func sessionRuntimeError(_ notification: Notification) {
+    @objc func sessionRuntimeError(_ notification: Notification) {
         let error = notification.userInfo![AVCaptureSessionErrorKey]! as! NSError
         NSLog("Capture session runtime error: %@", error)
         
@@ -1385,7 +1394,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         }
     }
     
-    @available(iOS 9.0, *)
+    @objc @available(iOS 9.0, *)
     func sessionWasInterrupted(_ notification: Notification) {
         // In some scenarios we want to enable the user to restart the capture session.
         // For example, if music playback is initiated via Control Center while using AVCamManual,
@@ -1393,7 +1402,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         // Note that stopping music playback in Control Center will not automatically resume the session.
         // Also note that it is not always possible to resume, see -[resumeInterruptedSession:].
         // In iOS 9 and later, the notification's userInfo dictionary contains information about why the session was interrupted
-        let reason = AVCaptureSessionInterruptionReason(rawValue: notification.userInfo![AVCaptureSessionInterruptionReasonKey]! as! Int)!
+        let reason = AVCaptureSession.InterruptionReason(rawValue: notification.userInfo![AVCaptureSessionInterruptionReasonKey]! as! Int)!
         NSLog("Capture session was interrupted with reason %ld", reason.rawValue)
         
         if reason == .audioDeviceInUseByAnotherClient ||
@@ -1414,7 +1423,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         }
     }
     
-    func sessionInterruptionEnded(_ notification: Notification) {
+    @objc func sessionInterruptionEnded(_ notification: Notification) {
         NSLog("Capture session interruption ended")
         
         if !self.resumeButton.isHidden {
@@ -1443,7 +1452,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
         self.photoButton.isEnabled = false
         
         self.sessionQueue.async {
-            var preferredPosition = AVCaptureDevicePosition.unspecified
+            var preferredPosition = AVCaptureDevice.Position.unspecified
             
             switch self.videoDevice!.position {
             case .unspecified,
@@ -1453,10 +1462,10 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
                 preferredPosition = .front
             }
             
-            let newVideoDevice = AVCamManualCameraViewController.deviceWithMediaType(AVMediaTypeVideo, preferringPosition: preferredPosition)
+            let newVideoDevice = AVCamManualCameraViewController.deviceWithMediaType(AVMediaType.video.rawValue, preferringPosition: preferredPosition)
             let newVideoDeviceInput: AVCaptureDeviceInput!
             do {
-                newVideoDeviceInput = try AVCaptureDeviceInput(device: newVideoDevice)
+                newVideoDeviceInput = try AVCaptureDeviceInput(device: newVideoDevice!)
             } catch _ {
                 newVideoDeviceInput = nil
             }
@@ -1464,7 +1473,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
             self.session.beginConfiguration()
             
             // Remove the existing device input first, since using the front and back camera simultaneously is not supported.
-            self.session.removeInput(self.videoDeviceInput)
+            self.session.removeInput(self.videoDeviceInput!)
             if self.session.canAddInput(newVideoDeviceInput) {
                 NotificationCenter.default.removeObserver(self,
                                                           name: .AVCaptureDeviceSubjectAreaDidChange, object: self.videoDevice)
@@ -1475,10 +1484,10 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
                 self.videoDeviceInput = newVideoDeviceInput
                 self.videoDevice = newVideoDevice
             } else {
-                self.session.addInput(self.videoDeviceInput)
+                self.session.addInput(self.videoDeviceInput!)
             }
             
-            let connection = self.movieFileOutput!.connection(withMediaType: AVMediaTypeVideo)
+            let connection = self.movieFileOutput!.connection(with: AVMediaType.video)
             if (connection?.isVideoStabilizationSupported)! {
                 connection?.preferredVideoStabilizationMode = .auto
             }
@@ -1497,8 +1506,8 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
     }
     
     @available(iOS, deprecated: 10.0)
-    private class func deviceWithMediaType(_ mediaType: String, preferringPosition position: AVCaptureDevicePosition) -> AVCaptureDevice? {
-        let devices = AVCaptureDevice.devices(withMediaType: mediaType) as! [AVCaptureDevice]
+    private class func deviceWithMediaType(_ mediaType: String, preferringPosition position: AVCaptureDevice.Position) -> AVCaptureDevice? {
+        let devices = AVCaptureDevice.devices(for: AVMediaType(rawValue: mediaType)) 
         var captureDevice = devices.first
         
         for device in devices {
@@ -1514,11 +1523,11 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
     @available(iOS, deprecated: 10.0)
     private func snapStillImage() {
         self.sessionQueue.async {
-            let stillImageConnection = self.stillImageOutput!.connection(withMediaType: AVMediaTypeVideo)
+            let stillImageConnection = self.stillImageOutput!.connection(with: AVMediaType.video)
             let previewLayer = self.previewView.layer as! AVCaptureVideoPreviewLayer
             
             // Update the orientation on the still image output video connection before capturing.
-            stillImageConnection?.videoOrientation = previewLayer.connection.videoOrientation
+            stillImageConnection?.videoOrientation = (previewLayer.connection?.videoOrientation)!
             
             // Flash set to Auto for Still Capture
             if self.videoDevice!.exposureMode == .custom {
@@ -1535,12 +1544,12 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
             }
             if !lensStabilizationEnabled {
                 // Capture a still image
-                self.stillImageOutput?.captureStillImageAsynchronously(from: self.stillImageOutput!.connection(withMediaType: AVMediaTypeVideo)) {imageDataSampleBuffer, error in
+                self.stillImageOutput?.captureStillImageAsynchronously(from: self.stillImageOutput!.connection(with: AVMediaType.video)!) {imageDataSampleBuffer, error in
                     
                     if error != nil {
                         NSLog("Error capture still image \(error!)")
                     } else if imageDataSampleBuffer != nil {
-                        let imageData = AVCaptureStillImageOutput.jpegStillImageNSDataRepresentation(imageDataSampleBuffer)!
+                        let imageData = AVCaptureStillImageOutput.jpegStillImageNSDataRepresentation(imageDataSampleBuffer!)!
                         
                         PHPhotoLibrary.requestAuthorization {status in
                             if status == PHAuthorizationStatus.authorized {
@@ -1553,9 +1562,17 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
                                         }
                                     })
                                 } else {
-                                    let temporaryFileName = ProcessInfo().globallyUniqueString as NSString
-                                    let temporaryFilePath = (NSTemporaryDirectory() as NSString).appendingPathComponent(temporaryFileName.appendingPathExtension("jpg")!)
-                                    let temporaryFileURL = URL(fileURLWithPath: temporaryFilePath)
+                                    let temporaryFileURL: URL
+                                    if #available(iOS 10.0, *) {
+                                        temporaryFileURL = FileManager.default
+                                            .temporaryDirectory
+                                            .appendingPathComponent(ProcessInfo().globallyUniqueString)
+                                            .appendingPathExtension("jpg")
+                                    } else {
+                                        let temporaryFileName = ProcessInfo().globallyUniqueString as NSString
+                                        let temporaryFilePath = (NSTemporaryDirectory() as NSString).appendingPathComponent(temporaryFileName.appendingPathExtension("jpg")!)
+                                        temporaryFileURL = URL(fileURLWithPath: temporaryFilePath)
+                                    }
                                     
                                     PHPhotoLibrary.shared().performChanges({
                                         do {
@@ -1584,12 +1601,12 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
                     // Capture a bracket
                     let bracketSettings: [AVCaptureBracketedStillImageSettings]
                     if self.videoDevice!.exposureMode == .custom {
-                        bracketSettings = [AVCaptureManualExposureBracketedStillImageSettings.manualExposureSettings(withExposureDuration: AVCaptureExposureDurationCurrent, iso: AVCaptureISOCurrent)]
+                        bracketSettings = [AVCaptureManualExposureBracketedStillImageSettings.manualExposureSettings(exposureDuration: AVCaptureDevice.currentExposureDuration, iso: AVCaptureDevice.currentISO)]
                     } else {
-                        bracketSettings = [AVCaptureAutoExposureBracketedStillImageSettings.autoExposureSettings(withExposureTargetBias: AVCaptureExposureTargetBiasCurrent)];
+                        bracketSettings = [AVCaptureAutoExposureBracketedStillImageSettings.autoExposureSettings(exposureTargetBias: AVCaptureDevice.currentExposureTargetBias)];
                     }
                     
-                    self.stillImageOutput!.captureStillImageBracketAsynchronously(from: self.stillImageOutput!.connection(withMediaType: AVMediaTypeVideo),
+                    self.stillImageOutput!.captureStillImageBracketAsynchronously(from: self.stillImageOutput!.connection(with: AVMediaType.video)!,
                                                                                   withSettingsArray: bracketSettings
                         
                     ) {imageDataSampleBuffer, stillImageSettings, error in
@@ -1597,7 +1614,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
                             NSLog("Error bracketing capture still image \(error!)")
                         } else if imageDataSampleBuffer != nil {
                             NSLog("Lens Stabilization State: \(CMGetAttachment(imageDataSampleBuffer!, kCMSampleBufferAttachmentKey_StillImageLensStabilizationInfo, nil)!)")
-                            let imageData = AVCaptureStillImageOutput.jpegStillImageNSDataRepresentation(imageDataSampleBuffer)
+                            let imageData = AVCaptureStillImageOutput.jpegStillImageNSDataRepresentation(imageDataSampleBuffer!)
                             
                             PHPhotoLibrary.requestAuthorization {status in
                                 if status == PHAuthorizationStatus.authorized {
@@ -1618,7 +1635,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
     }
     
     @available(iOS, deprecated: 10.0)
-    class func setFlashMode(_ flashMode: AVCaptureFlashMode, forDevice device: AVCaptureDevice) {
+    class func setFlashMode(_ flashMode: AVCaptureDevice.FlashMode, forDevice device: AVCaptureDevice) {
         if device.hasFlash && device.isFlashModeSupported(flashMode) {
             do {
                 try device.lockForConfiguration()
@@ -1645,12 +1662,12 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
                     // Still image capture will be done with the bracketed capture API.
                     self.stillImageOutput!.isLensStabilizationDuringBracketedCaptureEnabled = true
                     let bracketSettings: [AVCaptureBracketedStillImageSettings]
-                    if self.videoDevice!.exposureMode == AVCaptureExposureMode.custom {
-                        bracketSettings = [AVCaptureManualExposureBracketedStillImageSettings.manualExposureSettings(withExposureDuration: AVCaptureExposureDurationCurrent, iso: AVCaptureISOCurrent)]
+                    if self.videoDevice!.exposureMode == AVCaptureDevice.ExposureMode.custom {
+                        bracketSettings = [AVCaptureManualExposureBracketedStillImageSettings.manualExposureSettings(exposureDuration: AVCaptureDevice.currentExposureDuration, iso: AVCaptureDevice.currentISO)]
                     } else {
-                        bracketSettings = [AVCaptureAutoExposureBracketedStillImageSettings.autoExposureSettings(withExposureTargetBias: AVCaptureExposureTargetBiasCurrent)]
+                        bracketSettings = [AVCaptureAutoExposureBracketedStillImageSettings.autoExposureSettings(exposureTargetBias: AVCaptureDevice.currentExposureTargetBias)]
                     }
-                    self.stillImageOutput!.prepareToCaptureStillImageBracket(from: self.stillImageOutput!.connection(withMediaType: AVMediaTypeVideo),
+                    self.stillImageOutput!.prepareToCaptureStillImageBracket(from: self.stillImageOutput!.connection(with: AVMediaType.video)!,
                                                                              withSettingsArray: bracketSettings
                     ) {prepared, error in
                         if error != nil {
@@ -1670,7 +1687,7 @@ class AVCamManualCameraViewController: UIViewController, AVCaptureFileOutputReco
 
 //MARK: Utilities
 
-extension AVCaptureFocusMode: CustomStringConvertible {
+extension AVCaptureDevice.FocusMode: CustomStringConvertible {
     public var description: String {
         var string: String
         
@@ -1687,7 +1704,7 @@ extension AVCaptureFocusMode: CustomStringConvertible {
     }
 }
 
-extension AVCaptureExposureMode: CustomStringConvertible {
+extension AVCaptureDevice.ExposureMode: CustomStringConvertible {
     public var description: String {
         var string: String
         
@@ -1706,7 +1723,7 @@ extension AVCaptureExposureMode: CustomStringConvertible {
     }
 }
 
-extension AVCaptureWhiteBalanceMode: CustomStringConvertible {
+extension AVCaptureDevice.WhiteBalanceMode: CustomStringConvertible {
     public var description: String {
         var string: String
         
